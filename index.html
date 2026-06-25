@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VC Tinder</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="flame">🔥</span> VC&nbsp;Tinder</div>
+    <div class="progress" id="progress">—</div>
+    <div class="topbar-actions">
+      <button class="btn" id="toSwipe">▭ Swipe</button>
+      <button class="btn" id="toBoard">▦ Board</button>
+      <button class="btn ghost" id="resetBtn" title="Reset all to starting tiers">↺ Reset</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Swipe view -->
+    <section id="swipeView">
+      <div class="deck" id="deck"></div>
+
+      <div class="legend">
+        <div class="key"><kbd>→</kbd><span>Promote</span></div>
+        <div class="key"><kbd>←</kbd><span>Demote</span></div>
+        <div class="key"><kbd>↑</kbd><span>Keep</span></div>
+        <div class="key"><kbd>↓</kbd><span>Reject → Tier 5</span></div>
+        <div class="key"><kbd>1</kbd>–<kbd>5</kbd><span>Jump to tier</span></div>
+        <div class="key"><kbd>⌫</kbd><span>Undo</span></div>
+      </div>
+    </section>
+
+    <!-- Board view -->
+    <section id="boardView" hidden>
+      <div class="board" id="board"></div>
+      <div class="board-actions">
+        <button class="btn primary" id="exportBtn">⬇ Export CSV to repo</button>
+        <span class="msg" id="exportMsg"></span>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
