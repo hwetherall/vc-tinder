@@ -1,0 +1,11 @@
+# Node / npm (this is a zero-dependency project; these only show up by accident)
+node_modules/
+package-lock.json
+
+# gstack browse / tooling artifacts
+.gstack/
+
+# discover.mjs outputs and transactional-write scratch
+*.bak
+*.tmp
+Innovera-SeriesA-targets-scored.csv
