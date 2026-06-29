@@ -12,6 +12,8 @@ import {
   existingNameKeys,
   buildRow,
   writeCsvTransactional,
+  extractJson,
+  normalizeScore,
 } from './discover.mjs';
 
 // Tier labels that app.js startTier() recognizes. deriveTier must only emit these.
@@ -97,6 +99,48 @@ test('existingNameKeys builds a normalized set; aliases match', () => {
   assert.ok(keys.has('unusual'));
   // A new candidate named "a16z" should be detected as already present.
   assert.ok(keys.has(normalizeName('a16z')));
+});
+
+test('extractJson handles raw, ```json-fenced, and prose-wrapped model output', () => {
+  const obj = { thesis_fit: 22, note: 'ok' };
+  // raw
+  assert.deepEqual(extractJson(JSON.stringify(obj)), obj);
+  // ```json fenced (the case that broke the first scored run)
+  assert.deepEqual(extractJson('```json\n' + JSON.stringify(obj) + '\n```'), obj);
+  // bare ``` fence
+  assert.deepEqual(extractJson('```\n' + JSON.stringify(obj) + '\n```'), obj);
+  // leading/trailing prose
+  assert.deepEqual(extractJson('Here is the score:\n' + JSON.stringify(obj) + '\nDone.'), obj);
+  // malformed still throws (so the firm falls back to an unscored row)
+  assert.throws(() => extractJson('not json at all'));
+});
+
+test('normalizeScore flattens nested scores/gates and clamps (the bug that zeroed the first run)', () => {
+  const nested = {
+    scores: { thesis_fit: 22, network: 20, lead_capability: 23, location: 15, gravitas: 8 },
+    gates: { is_fund: true, is_accelerator: false, writes_500k_plus: true, does_series_a: true },
+    evidence: { thesis_fit: 'AI/data thesis', lead_capability: 'leads rounds' },
+    note: 'strong fit',
+  };
+  const s = normalizeScore(nested);
+  assert.equal(s.fit, 88);
+  assert.equal(s.thesis_fit, 22);
+  assert.equal(s.lead_capability, 23);
+  assert.equal(s.is_fund, true);
+  assert.equal(s.evidence.thesis, 'AI/data thesis'); // evidence.thesis_fit -> thesis
+  assert.equal(s.evidence.lead, 'leads rounds');     // evidence.lead_capability -> lead
+});
+
+test('normalizeScore handles the flat shape, maps medium->med, and clamps over-max', () => {
+  const flat = {
+    thesis_fit: 99, network: 10, lead_capability: 10, location: 5, gravitas: 5,
+    is_fund: true, is_accelerator: false, writes_500k_plus: true, does_series_a: true,
+    lead_capability_confidence: 'medium', evidence: {}, note: '',
+  };
+  const s = normalizeScore(flat);
+  assert.equal(s.thesis_fit, 25); // clamped from 99
+  assert.equal(s.fit, 25 + 10 + 10 + 5 + 5);
+  assert.equal(s.lead_capability_confidence, 'med');
 });
 
 test('buildRow aligns fields to the header and fills blanks', () => {

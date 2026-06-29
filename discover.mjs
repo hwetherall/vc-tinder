@@ -138,6 +138,18 @@ export function buildRow(header, fields) {
   return header.map((col) => (fields[col] == null ? '' : String(fields[col])));
 }
 
+// Extract a JSON object from a model response that may be wrapped in ```json
+// code fences or surrounded by prose (OpenRouter's json_object mode isn't
+// enforced for every model — opus-4 fences its output).
+export function extractJson(content) {
+  let s = String(content == null ? '' : content).trim();
+  s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const first = s.indexOf('{');
+  const last = s.lastIndexOf('}');
+  if (first !== -1 && last > first) s = s.slice(first, last + 1);
+  return JSON.parse(s);
+}
+
 /* ------------------------------------------------------------------ */
 /* Network (hand-rolled fetch, retries + timeout)                      */
 /* ------------------------------------------------------------------ */
@@ -263,9 +275,10 @@ const SCORE_SCHEMA = {
   ],
 };
 
-async function scoreFirm(candidate, evidenceText) {
+export async function scoreFirm(candidate, evidenceText) {
   if (!process.env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not set');
-  const prompt = `${RUBRIC}\n\nFirm: ${candidate.name}\nWebsite: ${candidate.url}\n\nEvidence (from the firm's site):\n${evidenceText.slice(0, 4000)}\n\nRespond with a JSON object matching the schema exactly. No prose, no markdown fences.`;
+  const shape = '{"thesis_fit":<0-25>,"network":<0-25>,"lead_capability":<0-25>,"location":<0-15>,"gravitas":<0-10>,"is_fund":<true|false>,"is_accelerator":<true|false>,"writes_500k_plus":<true|false>,"does_series_a":<true|false>,"lead_capability_confidence":"low|med|high","evidence":{"thesis":"<claim + url>","network":"...","lead":"...","location":"...","gravitas":"..."},"note":"<one line>"}';
+  const prompt = `${RUBRIC}\n\nFirm: ${candidate.name}\nWebsite: ${candidate.url}\n\nEvidence (from the firm's site):\n${evidenceText.slice(0, 4000)}\n\nReturn ONLY a JSON object with these EXACT top-level keys — flat, NOT nested under "scores"/"gates", no markdown fences:\n${shape}`;
   const data = await fetchJSON('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -283,15 +296,40 @@ async function scoreFirm(candidate, evidenceText) {
   const choice = (data.choices || [])[0];
   if (!choice) throw new Error('no choices in response');
   if (choice.finish_reason === 'content_filter') throw new Error('model refused');
-  const s = JSON.parse(choice.message.content);
+  const raw = extractJson(choice.message.content);
+  return normalizeScore(raw);
+}
 
-  // Clamp sub-scores to their rubric maxima; the schema can't enforce numeric ranges.
+// OpenRouter's json_object mode does not enforce our schema, so models vary the
+// shape (nesting under scores/gates, "medium" vs "med", thesis vs thesis_fit).
+// Normalize to the flat shape the rest of the pipeline expects, and clamp the
+// sub-scores to their rubric maxima.
+export function normalizeScore(raw) {
+  const sc = raw.scores || raw;   // scores may be nested under "scores"
+  const g = raw.gates || raw;     // gates may be nested under "gates"
+  const ev = raw.evidence || {};
   const clamp = (v, max) => Math.max(0, Math.min(max, Math.round(Number(v) || 0)));
-  s.thesis_fit = clamp(s.thesis_fit, 25);
-  s.network = clamp(s.network, 25);
-  s.lead_capability = clamp(s.lead_capability, 25);
-  s.location = clamp(s.location, 15);
-  s.gravitas = clamp(s.gravitas, 10);
+  const s = {
+    thesis_fit: clamp(sc.thesis_fit ?? sc.thesis, 25),
+    network: clamp(sc.network, 25),
+    lead_capability: clamp(sc.lead_capability ?? sc.lead, 25),
+    location: clamp(sc.location, 15),
+    gravitas: clamp(sc.gravitas, 10),
+    is_fund: g.is_fund !== false,            // default to true unless explicitly false
+    is_accelerator: g.is_accelerator === true,
+    writes_500k_plus: g.writes_500k_plus !== false,
+    does_series_a: g.does_series_a !== false,
+    lead_capability_confidence: String(raw.lead_capability_confidence || raw.confidence || 'low')
+      .toLowerCase().replace('medium', 'med'),
+    evidence: {
+      thesis: ev.thesis ?? ev.thesis_fit ?? '',
+      network: ev.network ?? '',
+      lead: ev.lead ?? ev.lead_capability ?? '',
+      location: ev.location ?? '',
+      gravitas: ev.gravitas ?? '',
+    },
+    note: raw.note || '',
+  };
   s.fit = s.thesis_fit + s.network + s.lead_capability + s.location + s.gravitas;
   return s;
 }
