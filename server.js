@@ -10,19 +10,28 @@ const path = require('path');
 const ROOT = __dirname;
 const PORT = 5173;
 const OUTPUT_CSV = 'Innovera-SeriesA-targets-scored.csv';
+// The system of record. discover.mjs appends here. Naming it explicitly avoids
+// the old "first *.csv alphabetically" behavior, where a stray CSV (a scored
+// export, a discovery sidecar) could silently shadow the real source.
+const SOURCE_CSV = 'Innovera-SeriesA-targets-from-Happenstance (1).csv';
 
 const STATIC = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/styles.css': { file: 'styles.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  '/csv.mjs': { file: 'csv.mjs', type: 'text/javascript; charset=utf-8' },
 };
 
-// Pick the source CSV: first *.csv in the folder that isn't our scored output.
+// Resolve the source CSV. Prefer the explicit SOURCE_CSV; fall back to the first
+// non-output *.csv alphabetically (ignoring backups) only if it's missing.
 function findSourceCsv() {
+  if (fs.existsSync(path.join(ROOT, SOURCE_CSV))) {
+    return path.join(ROOT, SOURCE_CSV);
+  }
   const csvs = fs
     .readdirSync(ROOT)
-    .filter((f) => f.toLowerCase().endsWith('.csv') && f !== OUTPUT_CSV)
+    .filter((f) => f.toLowerCase().endsWith('.csv') && f !== OUTPUT_CSV && !f.endsWith('.bak'))
     .sort();
   if (csvs.length === 0) return null;
   return path.join(ROOT, csvs[0]);

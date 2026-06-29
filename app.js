@@ -1,47 +1,8 @@
 // VC Tinder — front-end logic. No dependencies.
-'use strict';
-
-/* ------------------------------------------------------------------ */
-/* CSV parse / serialize (RFC-4180)                                    */
-/* ------------------------------------------------------------------ */
-
-function parseCSV(text) {
-  // Normalize line endings so the state machine only deals with "\n".
-  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const rows = [];
-  let row = [];
-  let field = '';
-  let inQuotes = false;
-  const n = text.length;
-  for (let i = 0; i < n; i++) {
-    const c = text[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { field += '"'; i++; }   // escaped quote
-        else { inQuotes = false; }
-      } else {
-        field += c;
-      }
-    } else {
-      if (c === '"') inQuotes = true;
-      else if (c === ',') { row.push(field); field = ''; }
-      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
-      else field += c;
-    }
-  }
-  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
-  // Drop fully-empty rows (stray blank lines).
-  return rows.filter((r) => r.some((v) => v !== ''));
-}
-
-function escapeField(v) {
-  const s = v == null ? '' : String(v);
-  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-}
-
-function serializeCSV(rows) {
-  return rows.map((r) => r.map(escapeField).join(',')).join('\r\n') + '\r\n';
-}
+// CSV primitives (parseCSV/serializeCSV) are shared with the Node discovery
+// script via csv.mjs, so the RFC-4180 logic lives in exactly one place.
+// This file is loaded as a module (<script type="module"> in index.html).
+import { parseCSV, serializeCSV } from './csv.mjs';
 
 /* ------------------------------------------------------------------ */
 /* Tier mapping (existing Tier label -> starting tier 1..5)            */
@@ -168,9 +129,62 @@ function cardMarkup(card) {
           ${locLine}
           ${contactLine}
         </div>
+        ${scoreMarkup(card)}
+        ${extraMarkup(card)}
       </div>
       ${tierRail(t)}
     </div>`;
+}
+
+// Rubric scores. Shown for any card that has a Fit value (existing scored rows
+// and AI-scored discovered rows alike).
+function scoreMarkup(card) {
+  const fit = val(card, 'Fit').trim();
+  if (!fit) return '';
+  const conf = val(card, 'Score Confidence').trim();
+  const pips = [
+    ['Thesis', val(card, 'Thesis Fit'), 25],
+    ['Network', val(card, 'Network'), 25],
+    ['Lead', val(card, 'Lead Capability'), 25],
+    ['Location', val(card, 'Location Score'), 15],
+    ['Gravitas', val(card, 'Gravitas Score'), 10],
+  ]
+    .filter(([, v]) => String(v).trim() !== '')
+    .map(([label, v, max]) =>
+      `<span style="font-size:.78rem;opacity:.85;white-space:nowrap"><b>${esc(String(v))}</b>/${max} ${esc(label)}</span>`)
+    .join('');
+  const confLine = conf ? ` · confidence ${esc(conf)}` : '';
+  return `<div style="margin-top:.8rem">
+      <div style="font-weight:600;font-size:.9rem">Fit ${esc(fit)}/100${confLine}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:.45rem;margin-top:.35rem">${pips}</div>
+    </div>`;
+}
+
+// Status + evidence (discovered cards). Evidence URLs are rendered as links,
+// XSS-safe: only http(s) URLs become anchors, all text is HTML-escaped first.
+function extraMarkup(card) {
+  const status = val(card, 'Status').trim();
+  const evidence = val(card, 'Evidence').trim();
+  if (!status && !evidence) return '';
+  const statusLine = status
+    ? `<div style="font-size:.78rem;opacity:.75;margin-top:.7rem">${esc(status)}</div>`
+    : '';
+  const ev = evidence
+    ? `<details style="margin-top:.4rem;font-size:.78rem;opacity:.9">
+         <summary style="cursor:pointer">Evidence</summary>
+         <div style="white-space:pre-wrap;margin-top:.3rem">${linkifyEsc(evidence)}</div>
+       </details>`
+    : '';
+  return statusLine + ev;
+}
+
+// Escape text, then linkify only http(s) URLs. Never produces an anchor for
+// javascript:/data: schemes — they don't match the http(s) pattern.
+function linkifyEsc(text) {
+  return esc(text).replace(
+    /(https?:\/\/[^\s<>"]+)/g,
+    (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`
+  );
 }
 
 function tierRail(active) {
