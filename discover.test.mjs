@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { parseCSV } from './csv.mjs';
 import {
   normalizeName,
   normalizeDomain,
@@ -7,6 +11,7 @@ import {
   deriveTier,
   existingNameKeys,
   buildRow,
+  writeCsvTransactional,
 } from './discover.mjs';
 
 // Tier labels that app.js startTier() recognizes. deriveTier must only emit these.
@@ -87,4 +92,27 @@ test('existingNameKeys builds a normalized set; aliases match', () => {
 test('buildRow aligns fields to the header and fills blanks', () => {
   const header = ['VC', 'Fit', 'Evidence', 'Score Confidence'];
   assert.deepEqual(buildRow(header, { VC: 'X', Fit: 90 }), ['X', '90', '', '']);
+});
+
+test('writeCsvTransactional puts new rows on top, pads existing, tolerates a blank row, writes a .bak', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vct-'));
+  const file = path.join(dir, 'src.csv');
+  try {
+    fs.writeFileSync(file, 'pre-existing', 'utf8'); // so the .bak path is exercised
+    const header = ['VC', 'Fit', 'Evidence', 'Score Confidence'];
+    const existing = [['Accel', '96'], ['', '', '', '']]; // 13-col-style short row + a fully-blank row
+    const fresh = [['NewFund', '88', 'thesis: strong', 'high']];
+
+    assert.doesNotThrow(() => writeCsvTransactional(file, header, existing, fresh));
+
+    const out = parseCSV(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(out[0], header);              // header preserved
+    assert.equal(out[1][0], 'NewFund');            // new rows written first (reachable)
+    assert.ok(out.some((r) => r[0] === 'Accel'));  // existing row kept
+    assert.ok(out.every((r) => r.length === header.length)); // padded rectangular
+    assert.ok(!out.some((r) => r.every((v) => v === ''))); // blank row dropped, not corrupting
+    assert.ok(fs.existsSync(file + '.bak'));        // backup written
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -7,9 +7,9 @@
 //   node discover.mjs --dry-run     # Stage 1: print candidates, write NOTHING
 //   node discover.mjs               # Stage 2: score candidates, write to CSV
 //
-// Requires: EXA_API_KEY  (discovery + evidence)
-//           ANTHROPIC_API_KEY  (scoring; Stage 2 only)
-// Optional: MODEL (default claude-opus-4-8), NUM_RESULTS (per anchor, default 8)
+// Requires: EXA_API_KEY        (discovery + evidence)
+//           OPENROUTER_API_KEY (scoring; Stage 2 only)
+// Optional: MODEL (default anthropic/claude-opus-4), NUM_RESULTS (per anchor, default 8)
 
 import fs from 'fs';
 import path from 'path';
@@ -18,7 +18,7 @@ import { parseCSV, serializeCSV } from './csv.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE_CSV = path.join(HERE, 'Innovera-SeriesA-targets-from-Happenstance (1).csv');
-const MODEL = process.env.MODEL || 'claude-opus-4-8';
+const MODEL = process.env.MODEL || 'anthropic/claude-opus-4';
 const NUM_RESULTS = Number(process.env.NUM_RESULTS || 8);
 
 // The 13-column source schema, plus the two columns discovery adds.
@@ -137,7 +137,13 @@ async function fetchJSON(url, opts, { tries = 3, timeoutMs = 30000 } = {}) {
         // 4xx other than 429: not retryable.
         throw Object.assign(new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`), { fatal: true });
       }
-      return await res.json();
+      try {
+        return await res.json();
+      } catch (e) {
+        // A malformed 200 body won't get better on retry — and retrying the
+        // Anthropic call would re-charge tokens. Treat as fatal.
+        throw Object.assign(new Error(`bad JSON in response: ${e.message}`), { fatal: true });
+      }
     } catch (err) {
       lastErr = err;
       if (err.fatal || attempt === tries) break;
@@ -163,6 +169,7 @@ async function exaFindSimilar(anchorUrl) {
 }
 
 async function exaContents(url) {
+  if (!process.env.EXA_API_KEY) throw new Error('EXA_API_KEY not set');
   const data = await fetchJSON('https://api.exa.ai/contents', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': process.env.EXA_API_KEY },
@@ -225,27 +232,26 @@ const SCORE_SCHEMA = {
 };
 
 async function scoreFirm(candidate, evidenceText) {
-  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set');
-  const prompt = `${RUBRIC}\n\nFirm: ${candidate.name}\nWebsite: ${candidate.url}\n\nEvidence (from the firm's site):\n${evidenceText.slice(0, 4000)}`;
-  const data = await fetchJSON('https://api.anthropic.com/v1/messages', {
+  if (!process.env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not set');
+  const prompt = `${RUBRIC}\n\nFirm: ${candidate.name}\nWebsite: ${candidate.url}\n\nEvidence (from the firm's site):\n${evidenceText.slice(0, 4000)}\n\nRespond with a JSON object matching the schema exactly. No prose, no markdown fences.`;
+  const data = await fetchJSON('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
+      'authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
     },
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 1500,
-      output_config: { format: { type: 'json_schema', schema: SCORE_SCHEMA } },
+      response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: prompt }],
     }),
   }, { timeoutMs: 60000 });
 
-  if (data.stop_reason === 'refusal') throw new Error('model refused');
-  const block = (data.content || []).find((b) => b.type === 'text');
-  if (!block) throw new Error('no text block in response');
-  const s = JSON.parse(block.text);
+  const choice = (data.choices || [])[0];
+  if (!choice) throw new Error('no choices in response');
+  if (choice.finish_reason === 'content_filter') throw new Error('model refused');
+  const s = JSON.parse(choice.message.content);
 
   // Clamp sub-scores to their rubric maxima; the schema can't enforce numeric ranges.
   const clamp = (v, max) => Math.max(0, Math.min(max, Math.round(Number(v) || 0)));
@@ -307,7 +313,7 @@ function unscoredRow(header, candidate, errMsg) {
 /* Transactional CSV write                                             */
 /* ------------------------------------------------------------------ */
 
-function writeCsvTransactional(filePath, headerRow, existingDataRows, newRows) {
+export function writeCsvTransactional(filePath, headerRow, existingDataRows, newRows) {
   // New rows go FIRST so discovered cards are reachable without re-swiping the
   // existing list. Existing rows are padded to the (extended) header width.
   const width = headerRow.length;
@@ -316,9 +322,11 @@ function writeCsvTransactional(filePath, headerRow, existingDataRows, newRows) {
   const csv = serializeCSV(all);
 
   // Validate the serialized output round-trips to a rectangular table before
-  // touching the real file.
+  // touching the real file. parseCSV drops fully-blank rows, so compare against
+  // the count of NON-blank rows (correct whether or not `all` contains blanks).
+  const expected = all.filter((r) => r.some((v) => v !== '')).length;
   const check = parseCSV(csv);
-  if (check.length < all.length) throw new Error('validation failed: row count shrank after serialize');
+  if (check.length !== expected) throw new Error('validation failed: row count changed after serialize');
   if (!check.every((r) => r.length === width)) throw new Error('validation failed: ragged rows');
 
   const tmp = filePath + '.tmp';
