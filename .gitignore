@@ -1,3 +1,8 @@
+# Secrets — never commit API keys (EXA_API_KEY / ANTHROPIC_API_KEY)
+.env
+.env.*
+!.env.example
+
 # Node / npm (this is a zero-dependency project; these only show up by accident)
 node_modules/
 package-lock.json
