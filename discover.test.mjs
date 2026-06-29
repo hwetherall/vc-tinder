@@ -42,17 +42,27 @@ test('normalizeDomain extracts the bare host', () => {
   assert.equal(normalizeDomain('not a url'), '');
 });
 
-test('gateCandidate rejects accelerators/studios, flags non-venture, keeps real funds', () => {
+test('gateCandidate rejects accelerators/studios, flags non-lead vehicles, keeps real funds', () => {
   assert.equal(gateCandidate('Plug and Play', 'startup accelerator program').keep, false);
   assert.equal(gateCandidate('GSD Venture Studios', 'a venture studio').keep, false);
 
-  const fund = gateCandidate('Acme Capital', 'early-stage venture fund investing in AI');
+  const fund = gateCandidate('Acme Capital', 'early-stage venture fund investing in AI', 'https://acme.vc');
   assert.equal(fund.keep, true);
   assert.equal(fund.flag, '');
 
   const pe = gateCandidate('Blackstone', 'private equity firm');
   assert.equal(pe.keep, true);
   assert.notEqual(pe.flag, '');
+});
+
+test('gateCandidate (tightened) rejects non-VC entities, social URLs, and degenerate names', () => {
+  assert.equal(gateCandidate('Mayfield Consulting Ltd', '').keep, false);     // consulting
+  assert.equal(gateCandidate('Acme Financial Services', '').keep, false);     // financial services
+  assert.equal(gateCandidate('Helix Bioscience Fund', '').keep, false);       // sector mismatch
+  assert.equal(gateCandidate('Mayfield Management Co', '').keep, false);      // management co
+  assert.equal(gateCandidate('DCVC Bio', '', 'https://linkedin.com/company/dcvcbio').keep, false); // social URL
+  assert.equal(gateCandidate('_____', '', 'https://dh.vc').keep, false);      // degenerate name
+  assert.equal(gateCandidate('Root Ventures', 'seed deep-tech fund', 'https://root.vc').keep, true); // real fund survives
 });
 
 test('deriveTier maps composite + gates to recognized labels', () => {

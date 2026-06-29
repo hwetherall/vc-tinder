@@ -39,7 +39,16 @@ const ANCHORS = {
   'Radical Ventures': 'https://radical.vc',
   'Glasswing Ventures': 'https://www.glasswing.vc',
   'Fusion Fund': 'https://www.fusionfund.com',
+  // Confirmed Tier-1 leads recovered from the data: "Branch" -> Mayfield, "Charlie" -> DCVC.
+  'Mayfield Fund': 'https://www.mayfield.com',
+  'DCVC': 'https://www.dcvc.com',
 };
+
+// Profile-based search query: targets thesis + lead-capability directly, rather
+// than the branding/page similarity that find-similar keys on. Edit to retune.
+const PROFILE_QUERY =
+  'early-stage venture capital firm that leads Series A rounds in AI infrastructure, ' +
+  'fintech, and data tooling startups, writing $5-7 million lead checks';
 
 // Known name aliases (canonical form on the right). Pure fuzzy/edit-distance
 // will not catch these — they share almost no characters.
@@ -78,15 +87,23 @@ export function normalizeDomain(url) {
   }
 }
 
-// Keyword gate. Returns { keep, reason, flag } from the firm name + a blob of
-// text (Exa title + snippet). Rejects accelerators/studios/etc.; flags (keeps)
-// non-venture vehicles for human review.
-const REJECT_RE = /\b(accelerator|incubator|studio|syndicate|angel network|bootcamp|hackathon)\b/i;
-const FLAG_RE = /\b(private equity|growth equity|hedge fund|fund of funds|family office|wealth management|broker)\b/i;
-export function gateCandidate(name, text) {
+// Keyword gate. Returns { keep, reason, flag } from the firm name, a blob of
+// text (Exa title + snippet), and the URL. Rejects accelerators/studios, non-VC
+// entities (consulting/financial/sector-mismatch), social/aggregator URLs, and
+// degenerate names; flags (keeps) non-lead vehicles (PE/growth/family office).
+const REJECT_RE = /\b(accelerator|incubator|studio|syndicate|angel network|bootcamp|hackathon|consult(ing|ant)?|advisor[sy]?|financial services|wealth|holdings?|bank|bancorp|insurance|real estate|recruit(ing|ment)?|patent|biotech|bioscience|life ?science|therapeutic|management (co|company|ltd|llc))\b/i;
+const FLAG_RE = /\b(private equity|growth equity|hedge fund|fund of funds|family office|broker)\b/i;
+const BAD_HOST_RE = /(?:^|\.)(?:linkedin|crunchbase|twitter|facebook|instagram|wikipedia|medium|youtube|x)\.com$/i;
+export function gateCandidate(name, text, url) {
+  if (String(name || '').replace(/[^a-z0-9]/gi, '').length < 2) {
+    return { keep: false, reason: 'degenerate/blank name', flag: '' };
+  }
+  let host = '';
+  try { host = new URL(url).hostname; } catch { /* url is optional */ }
+  if (BAD_HOST_RE.test(host)) return { keep: false, reason: 'not a firm homepage (social/aggregator)', flag: '' };
   const blob = `${name} ${text || ''}`;
-  if (REJECT_RE.test(blob)) return { keep: false, reason: 'accelerator/studio/syndicate', flag: '' };
-  if (FLAG_RE.test(blob)) return { keep: true, reason: '', flag: 'non-venture vehicle? verify' };
+  if (REJECT_RE.test(blob)) return { keep: false, reason: 'non-VC entity (consulting/financial/sector-mismatch)', flag: '' };
+  if (FLAG_RE.test(blob)) return { keep: true, reason: '', flag: 'non-lead vehicle? verify' };
   return { keep: true, reason: '', flag: '' };
 }
 
@@ -163,6 +180,21 @@ async function exaFindSimilar(anchorUrl) {
       numResults: NUM_RESULTS,
       excludeSourceDomain: true,
       category: 'company',
+    }),
+  });
+  return (data.results || []).map((r) => ({ url: r.url, title: r.title || '' }));
+}
+
+async function exaSearch(query) {
+  if (!process.env.EXA_API_KEY) throw new Error('EXA_API_KEY not set');
+  const data = await fetchJSON('https://api.exa.ai/search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': process.env.EXA_API_KEY },
+    body: JSON.stringify({
+      query,
+      numResults: Math.max(NUM_RESULTS * 2, 16),
+      category: 'company',
+      type: 'auto',
     }),
   });
   return (data.results || []).map((r) => ({ url: r.url, title: r.title || '' }));
@@ -339,29 +371,41 @@ export function writeCsvTransactional(filePath, headerRow, existingDataRows, new
 /* Pipeline                                                            */
 /* ------------------------------------------------------------------ */
 
+// Dedup (by domain + existing name) and gate a single Exa result, pushing it
+// onto `candidates` if it survives. Shared by find-similar and profile search.
+function tryAddCandidate(r, seed, existingKeys, seenDomains, candidates) {
+  const domain = normalizeDomain(r.url);
+  if (!domain || seenDomains.has(domain)) return;
+  const name = cleanName(r.title, domain);
+  if (existingKeys.has(normalizeName(name))) return; // already in the CSV (by name)
+  const gate = gateCandidate(name, r.title, r.url);
+  if (!gate.keep) return;
+  seenDomains.add(domain);
+  candidates.push({ name, url: r.url, domain, seed, flag: gate.flag });
+}
+
 async function discoverCandidates(existingKeys) {
   const seenDomains = new Set();
   const candidates = [];
+
+  // 1) find-similar off the focused-KEEP anchors (useful but branding-biased).
   for (const [seed, anchorUrl] of Object.entries(ANCHORS)) {
-    let results = [];
     try {
-      results = await exaFindSimilar(anchorUrl);
+      const results = await exaFindSimilar(anchorUrl);
+      for (const r of results) tryAddCandidate(r, seed, existingKeys, seenDomains, candidates);
     } catch (err) {
       console.error(`  ! find-similar failed for ${seed}: ${err.message}`);
-      continue;
-    }
-    for (const r of results) {
-      const domain = normalizeDomain(r.url);
-      if (!domain || seenDomains.has(domain)) continue;
-      const name = cleanName(r.title, domain);
-      const key = normalizeName(name);
-      if (existingKeys.has(key)) continue; // already in the CSV (by name)
-      const gate = gateCandidate(name, r.title);
-      if (!gate.keep) continue;
-      seenDomains.add(domain);
-      candidates.push({ name, url: r.url, domain, seed, flag: gate.flag });
     }
   }
+
+  // 2) profile-based search: targets thesis + lead-capability, not branding.
+  try {
+    const results = await exaSearch(PROFILE_QUERY);
+    for (const r of results) tryAddCandidate(r, 'profile', existingKeys, seenDomains, candidates);
+  } catch (err) {
+    console.error(`  ! profile search failed: ${err.message}`);
+  }
+
   return candidates;
 }
 
@@ -384,7 +428,7 @@ async function main() {
   const rows = parseCSV(fs.readFileSync(SOURCE_CSV, 'utf8'));
   const existingKeys = existingNameKeys(rows);
 
-  console.log(`Seeds: ${Object.keys(ANCHORS).join(', ')}`);
+  console.log(`Seeds: ${Object.keys(ANCHORS).join(', ')} + ideal-lead profile search`);
   console.log(`Existing firms: ${existingKeys.size}. Discovering...`);
   const candidates = await discoverCandidates(existingKeys);
   console.log(`Found ${candidates.length} new, gated, deduped candidates.\n`);
