@@ -18,3 +18,4 @@ Innovera-SeriesA-targets-scored.csv
 # Excel working copies + lock files (the CSV is the source of record)
 *.xlsx
 ~$*
+exports/

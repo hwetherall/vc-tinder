@@ -13,6 +13,8 @@
     <div class="topbar-actions">
       <button class="btn" id="toSwipe">▭ Swipe</button>
       <button class="btn" id="toBoard">▦ Board</button>
+      <button class="btn" id="toDirectory">▤ VCs</button>
+      <button class="btn" id="toDigest">📰 Digest</button>
       <button class="btn ghost" id="resetBtn" title="Reset all to starting tiers">↺ Reset</button>
     </div>
   </header>
@@ -39,6 +41,36 @@
         <button class="btn primary" id="exportBtn">⬇ Export CSV to repo</button>
         <span class="msg" id="exportMsg"></span>
       </div>
+    </section>
+
+    <!-- Directory view -->
+    <section id="dirView" hidden>
+      <div class="panel">
+        <div class="dir-controls">
+          <input id="dirSearch" class="search" type="search"
+                 placeholder="Search name, location, tags…" autocomplete="off" />
+          <select id="dirTier" class="search select">
+            <option value="0">All tiers</option>
+            <option value="1">Tier 1 · Open now</option>
+            <option value="2">Tier 2 · Cultivate</option>
+            <option value="3">Tier 3 · Follow</option>
+            <option value="4">Tier 4 · Referral</option>
+            <option value="5">Tier 5 · Pass</option>
+          </select>
+          <span class="dir-count" id="dirCount"></span>
+        </div>
+        <div class="dir-table" id="dirTable"></div>
+      </div>
+    </section>
+
+    <!-- Dossier view (single firm) -->
+    <section id="dossierView" hidden>
+      <div class="panel" id="dossier"></div>
+    </section>
+
+    <!-- Digest view -->
+    <section id="digestView" hidden>
+      <div class="panel" id="digests"></div>
     </section>
   </main>
 

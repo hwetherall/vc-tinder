@@ -1,32 +1,24 @@
 // VC Tinder — discovery.
 // Finds lead-capable, in-thesis VC firms that neither Happenstance nor the
 // top-100 surfaced, scores them against the existing rubric, and writes them
-// into the source CSV so they appear as cards in the swipe UI.
+// into the Supabase `firms` table so they appear as cards in the swipe UI.
 //
 // Zero dependency: Node built-in fetch (Node 18+), no SDK. Run with:
 //   node discover.mjs --dry-run     # Stage 1: print candidates, write NOTHING
-//   node discover.mjs               # Stage 2: score candidates, write to CSV
+//   node discover.mjs               # Stage 2: score candidates, write to Supabase
 //
 // Requires: EXA_API_KEY        (discovery + evidence)
 //           OPENROUTER_API_KEY (scoring; Stage 2 only)
+//           SUPABASE_URL + SUPABASE_KEY (dedup against + write to the firms table)
 // Optional: MODEL (default anthropic/claude-opus-4), NUM_RESULTS (per anchor, default 8)
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
-import { parseCSV, serializeCSV } from './csv.mjs';
+import { pathToFileURL } from 'url';
+import { loadEnv, sbSelect, sbInsert } from './db.mjs';
+import { exaFindSimilar, exaSearch, exaContents } from './exa.mjs';
+import { chatJSON } from './llm.mjs';
+export { extractJson } from './llm.mjs';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SOURCE_CSV = path.join(HERE, 'Innovera-SeriesA-targets-from-Happenstance (1).csv');
-const MODEL = process.env.MODEL || 'anthropic/claude-opus-4';
 const NUM_RESULTS = Number(process.env.NUM_RESULTS || 8);
-
-// The 13-column source schema, plus the two columns discovery adds.
-const BASE_COLS = [
-  'VC', 'Tier', 'Proximity', 'Fit', 'Location', 'Contact', 'Thesis Fit',
-  'Network', 'Lead Capability', 'Location Score', 'Gravitas Score', 'Status', 'Intro Path',
-];
-const NEW_COLS = ['Evidence', 'Score Confidence'];
 
 // Seed anchors: FOCUSED early-stage KEEP firms, not the prestige giants.
 // find-similar on a16z returns more giants that can't lead a $10m round;
@@ -120,109 +112,6 @@ export function deriveTier(s) {
   return 'Referral / deprioritize';
 }
 
-// Build an existing-firm key set from parsed CSV rows (header + data rows).
-export function existingNameKeys(rows) {
-  const header = rows[0] || [];
-  const vcIdx = header.findIndex((h) => h.toLowerCase().trim() === 'vc');
-  const keys = new Set();
-  for (const r of rows.slice(1)) {
-    const name = vcIdx >= 0 ? r[vcIdx] : r[0];
-    const k = normalizeName(name);
-    if (k) keys.add(k);
-  }
-  return keys;
-}
-
-// Assemble a CSV row aligned to `header` from a {column: value} map.
-export function buildRow(header, fields) {
-  return header.map((col) => (fields[col] == null ? '' : String(fields[col])));
-}
-
-// Extract a JSON object from a model response that may be wrapped in ```json
-// code fences or surrounded by prose (OpenRouter's json_object mode isn't
-// enforced for every model — opus-4 fences its output).
-export function extractJson(content) {
-  let s = String(content == null ? '' : content).trim();
-  s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  const first = s.indexOf('{');
-  const last = s.lastIndexOf('}');
-  if (first !== -1 && last > first) s = s.slice(first, last + 1);
-  return JSON.parse(s);
-}
-
-/* ------------------------------------------------------------------ */
-/* Network (hand-rolled fetch, retries + timeout)                      */
-/* ------------------------------------------------------------------ */
-
-async function fetchJSON(url, opts, { tries = 3, timeoutMs = 30000 } = {}) {
-  let lastErr;
-  for (let attempt = 1; attempt <= tries; attempt++) {
-    try {
-      const res = await fetch(url, { ...opts, signal: AbortSignal.timeout(timeoutMs) });
-      if (res.status === 429 || res.status >= 500) {
-        throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-      }
-      if (!res.ok) {
-        // 4xx other than 429: not retryable.
-        throw Object.assign(new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`), { fatal: true });
-      }
-      try {
-        return await res.json();
-      } catch (e) {
-        // A malformed 200 body won't get better on retry — and retrying the
-        // Anthropic call would re-charge tokens. Treat as fatal.
-        throw Object.assign(new Error(`bad JSON in response: ${e.message}`), { fatal: true });
-      }
-    } catch (err) {
-      lastErr = err;
-      if (err.fatal || attempt === tries) break;
-      await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1) + Math.floor(attempt * 137)));
-    }
-  }
-  throw lastErr;
-}
-
-async function exaFindSimilar(anchorUrl) {
-  if (!process.env.EXA_API_KEY) throw new Error('EXA_API_KEY not set');
-  const data = await fetchJSON('https://api.exa.ai/findSimilar', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': process.env.EXA_API_KEY },
-    body: JSON.stringify({
-      url: anchorUrl,
-      numResults: NUM_RESULTS,
-      excludeSourceDomain: true,
-      category: 'company',
-    }),
-  });
-  return (data.results || []).map((r) => ({ url: r.url, title: r.title || '' }));
-}
-
-async function exaSearch(query) {
-  if (!process.env.EXA_API_KEY) throw new Error('EXA_API_KEY not set');
-  const data = await fetchJSON('https://api.exa.ai/search', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': process.env.EXA_API_KEY },
-    body: JSON.stringify({
-      query,
-      numResults: Math.max(NUM_RESULTS * 2, 16),
-      category: 'company',
-      type: 'auto',
-    }),
-  });
-  return (data.results || []).map((r) => ({ url: r.url, title: r.title || '' }));
-}
-
-async function exaContents(url) {
-  if (!process.env.EXA_API_KEY) throw new Error('EXA_API_KEY not set');
-  const data = await fetchJSON('https://api.exa.ai/contents', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': process.env.EXA_API_KEY },
-    body: JSON.stringify({ urls: [url], text: { maxCharacters: 4000 } }),
-  });
-  const r = (data.results || [])[0] || {};
-  return { title: r.title || '', text: r.text || '' };
-}
-
 /* ------------------------------------------------------------------ */
 /* Scoring (Claude Messages API, structured output)                    */
 /* ------------------------------------------------------------------ */
@@ -276,28 +165,9 @@ const SCORE_SCHEMA = {
 };
 
 export async function scoreFirm(candidate, evidenceText) {
-  if (!process.env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not set');
   const shape = '{"thesis_fit":<0-25>,"network":<0-25>,"lead_capability":<0-25>,"location":<0-15>,"gravitas":<0-10>,"is_fund":<true|false>,"is_accelerator":<true|false>,"writes_500k_plus":<true|false>,"does_series_a":<true|false>,"lead_capability_confidence":"low|med|high","evidence":{"thesis":"<claim + url>","network":"...","lead":"...","location":"...","gravitas":"..."},"note":"<one line>"}';
   const prompt = `${RUBRIC}\n\nFirm: ${candidate.name}\nWebsite: ${candidate.url}\n\nEvidence (from the firm's site):\n${evidenceText.slice(0, 4000)}\n\nReturn ONLY a JSON object with these EXACT top-level keys — flat, NOT nested under "scores"/"gates", no markdown fences:\n${shape}`;
-  const data = await fetchJSON('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 1500,
-      response_format: { type: 'json_object' },
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  }, { timeoutMs: 60000 });
-
-  const choice = (data.choices || [])[0];
-  if (!choice) throw new Error('no choices in response');
-  if (choice.finish_reason === 'content_filter') throw new Error('model refused');
-  const raw = extractJson(choice.message.content);
-  return normalizeScore(raw);
+  return normalizeScore(await chatJSON(prompt));
 }
 
 // OpenRouter's json_object mode does not enforce our schema, so models vary the
@@ -335,74 +205,59 @@ export function normalizeScore(raw) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Row construction                                                    */
+/* Firm records (Supabase rows)                                        */
 /* ------------------------------------------------------------------ */
 
-function scoredRow(header, candidate, s) {
+// Per-sub-score claims as one readable block, ending with the source URL.
+export function evidenceBlock(s, sourceUrl) {
   const ev = s.evidence || {};
-  const evidence = [
+  return [
     ['thesis', s.thesis_fit, ev.thesis],
     ['network', s.network, ev.network],
     ['lead', s.lead_capability, ev.lead],
     ['location', s.location, ev.location],
     ['gravitas', s.gravitas, ev.gravitas],
-  ].map(([k, v, claim]) => `${k} (${v}): ${claim || '—'}`).join('\n') + `\nsource: ${candidate.url}`;
-  return buildRow(header, {
-    VC: candidate.name,
-    Tier: deriveTier(s),
-    Proximity: 'Cold (discovered)',
-    Fit: s.fit,
-    Location: candidate.location || '',
-    Contact: '',
-    'Thesis Fit': s.thesis_fit,
-    Network: s.network,
-    'Lead Capability': s.lead_capability,
-    'Location Score': s.location,
-    'Gravitas Score': s.gravitas,
-    Status: `DISCOVERED (AI-scored): ${s.note || ''}`.trim(),
-    'Intro Path': `discovered via Exa find-similar; seed ${candidate.seed}`,
-    Evidence: evidence,
-    'Score Confidence': s.lead_capability_confidence || '',
-  });
+  ].map(([k, v, claim]) => `${k} (${v}): ${claim || '—'}`).join('\n') + `\nsource: ${sourceUrl}`;
 }
 
-function unscoredRow(header, candidate, errMsg) {
-  return buildRow(header, {
-    VC: candidate.name,
-    Tier: 'TBD', // recognized by startTier() -> tier 3
-    Proximity: 'Cold (discovered)',
-    Location: candidate.location || '',
-    Status: `DISCOVERED — needs scoring (scoring failed: ${errMsg})`,
-    'Intro Path': `discovered via Exa find-similar; seed ${candidate.seed}`,
-    Evidence: candidate.url,
-    'Score Confidence': '',
-  });
+// Newly discovered firms get sort_order NULL, which the server orders first —
+// so fresh discoveries surface at the top of the swipe deck for triage.
+function scoredRecord(candidate, s) {
+  const evidence = evidenceBlock(s, candidate.url);
+  return {
+    name: candidate.name,
+    normalized_name: normalizeName(candidate.name),
+    website: candidate.url,
+    domain: candidate.domain,
+    proximity: 'Cold (discovered)',
+    tier_label: deriveTier(s),
+    fit: s.fit,
+    thesis_fit: s.thesis_fit,
+    network: s.network,
+    lead_capability: s.lead_capability,
+    location_score: s.location,
+    gravitas_score: s.gravitas,
+    score_confidence: s.lead_capability_confidence || null,
+    status: `DISCOVERED (AI-scored): ${s.note || ''}`.trim(),
+    intro_path: `discovered via Exa find-similar; seed ${candidate.seed}`,
+    evidence,
+    source: 'discovered',
+  };
 }
 
-/* ------------------------------------------------------------------ */
-/* Transactional CSV write                                             */
-/* ------------------------------------------------------------------ */
-
-export function writeCsvTransactional(filePath, headerRow, existingDataRows, newRows) {
-  // New rows go FIRST so discovered cards are reachable without re-swiping the
-  // existing list. Existing rows are padded to the (extended) header width.
-  const width = headerRow.length;
-  const pad = (r) => (r.length >= width ? r.slice(0, width) : r.concat(Array(width - r.length).fill('')));
-  const all = [headerRow, ...newRows.map(pad), ...existingDataRows.map(pad)];
-  const csv = serializeCSV(all);
-
-  // Validate the serialized output round-trips to a rectangular table before
-  // touching the real file. parseCSV drops fully-blank rows, so compare against
-  // the count of NON-blank rows (correct whether or not `all` contains blanks).
-  const expected = all.filter((r) => r.some((v) => v !== '')).length;
-  const check = parseCSV(csv);
-  if (check.length !== expected) throw new Error('validation failed: row count changed after serialize');
-  if (!check.every((r) => r.length === width)) throw new Error('validation failed: ragged rows');
-
-  const tmp = filePath + '.tmp';
-  fs.writeFileSync(tmp, csv, 'utf8');
-  if (fs.existsSync(filePath)) fs.copyFileSync(filePath, filePath + '.bak');
-  fs.renameSync(tmp, filePath);
+function unscoredRecord(candidate, errMsg) {
+  return {
+    name: candidate.name,
+    normalized_name: normalizeName(candidate.name),
+    website: candidate.url,
+    domain: candidate.domain,
+    proximity: 'Cold (discovered)',
+    tier_label: 'TBD', // recognized by startTier() -> tier 3
+    status: `DISCOVERED — needs scoring (scoring failed: ${errMsg})`,
+    intro_path: `discovered via Exa find-similar; seed ${candidate.seed}`,
+    evidence: candidate.url,
+    source: 'discovered',
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -415,7 +270,7 @@ function tryAddCandidate(r, seed, existingKeys, seenDomains, candidates) {
   const domain = normalizeDomain(r.url);
   if (!domain || seenDomains.has(domain)) return;
   const name = cleanName(r.title, domain);
-  if (existingKeys.has(normalizeName(name))) return; // already in the CSV (by name)
+  if (existingKeys.has(normalizeName(name))) return; // already in the DB (by name)
   const gate = gateCandidate(name, r.title, r.url);
   if (!gate.keep) return;
   seenDomains.add(domain);
@@ -429,7 +284,7 @@ async function discoverCandidates(existingKeys) {
   // 1) find-similar off the focused-KEEP anchors (useful but branding-biased).
   for (const [seed, anchorUrl] of Object.entries(ANCHORS)) {
     try {
-      const results = await exaFindSimilar(anchorUrl);
+      const results = await exaFindSimilar(anchorUrl, NUM_RESULTS);
       for (const r of results) tryAddCandidate(r, seed, existingKeys, seenDomains, candidates);
     } catch (err) {
       console.error(`  ! find-similar failed for ${seed}: ${err.message}`);
@@ -438,7 +293,7 @@ async function discoverCandidates(existingKeys) {
 
   // 2) profile-based search: targets thesis + lead-capability, not branding.
   try {
-    const results = await exaSearch(PROFILE_QUERY);
+    const results = await exaSearch(PROFILE_QUERY, { numResults: Math.max(NUM_RESULTS * 2, 16) });
     for (const r of results) tryAddCandidate(r, 'profile', existingKeys, seenDomains, candidates);
   } catch (err) {
     console.error(`  ! profile search failed: ${err.message}`);
@@ -458,13 +313,11 @@ function cleanName(title, domain) {
 }
 
 async function main() {
+  loadEnv();
   const dryRun = process.argv.includes('--dry-run');
-  if (!fs.existsSync(SOURCE_CSV)) {
-    console.error(`Source CSV not found: ${SOURCE_CSV}`);
-    process.exit(1);
-  }
-  const rows = parseCSV(fs.readFileSync(SOURCE_CSV, 'utf8'));
-  const existingKeys = existingNameKeys(rows);
+
+  const firms = await sbSelect('firms?select=normalized_name');
+  const existingKeys = new Set(firms.map((f) => f.normalized_name).filter(Boolean));
 
   console.log(`Seeds: ${Object.keys(ANCHORS).join(', ')} + ideal-lead profile search`);
   console.log(`Existing firms: ${existingKeys.size}. Discovering...`);
@@ -485,32 +338,26 @@ async function main() {
     return;
   }
 
-  // Stage 2: score each candidate; failures fall back to an unscored row.
-  const header = mergeHeader(rows[0]);
-  const newRows = [];
+  // Stage 2: score each candidate; failures fall back to an unscored record.
+  const records = [];
   for (const c of candidates) {
     process.stdout.write(`  scoring ${c.name} ... `);
     try {
       const { text } = await exaContents(c.url);
       const s = await scoreFirm(c, text);
-      newRows.push(scoredRow(header, c, s));
+      records.push(scoredRecord(c, s));
       console.log(`Fit ${s.fit} -> ${deriveTier(s)}`);
     } catch (err) {
-      newRows.push(unscoredRow(header, c, err.message));
+      records.push(unscoredRecord(c, err.message));
       console.log(`unscored (${err.message})`);
     }
   }
 
-  writeCsvTransactional(SOURCE_CSV, header, rows.slice(1), newRows);
-  console.log(`\nWrote ${newRows.length} discovered firms to the top of the CSV (backup: .bak).`);
-  console.log('Reload the swipe UI to triage them.');
-}
-
-// Ensure the header carries the two discovery columns.
-function mergeHeader(existingHeader) {
-  const h = (existingHeader || BASE_COLS).slice();
-  for (const col of NEW_COLS) if (!h.includes(col)) h.push(col);
-  return h;
+  // Upsert-ignore on normalized_name: a name collision with an existing firm
+  // (or between two candidates) skips the duplicate instead of failing the batch.
+  const inserted = await sbInsert('firms', records, { onConflict: 'normalized_name' });
+  console.log(`\nWrote ${(inserted || []).length} discovered firms to Supabase.`);
+  console.log('Reload the swipe UI to triage them (new firms sort to the top).');
 }
 
 // Run only when invoked directly (not when imported by tests).
