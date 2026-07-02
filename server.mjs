@@ -161,13 +161,15 @@ async function handleReset(res) {
   sendJson(res, 200, { deleted: existed, path: outPath });
 }
 
+// no-store: this is a live internal tool — a stale cached app.js after an
+// update is worse than re-downloading a few KB per load.
 function sendJson(res, status, obj) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(obj));
 }
 
 function sendText(res, status, text, type) {
-  res.writeHead(status, { 'Content-Type': type || 'text/plain; charset=utf-8' });
+  res.writeHead(status, { 'Content-Type': type || 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(text);
 }
 

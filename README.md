@@ -12,6 +12,9 @@ node discover.mjs --dry-run   # find new candidate firms (Exa) — print only
 node discover.mjs             # score candidates, write to Supabase
 node enrich.mjs --dry-run     # enrichment work list (facts, deals, contacts, emails)
 node enrich.mjs               # enrich tier 1-2 firms (see --stages/--tiers/--source/--firm)
+node monitor.mjs              # sweep news for watched firms + write weekly digest
+node signal-ingest.mjs <url>  # ingest a Signal NFX investor profile (URL or saved .html)
+node export.mjs               # Attio-ready companies + people CSVs into exports/
 node import-connections.mjs   # import harrys-connections.md (research + score new firms)
 node import-csv.mjs           # one-time CSV import (idempotent, safe to re-run)
 node --test                   # tests

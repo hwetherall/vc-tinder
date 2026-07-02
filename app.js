@@ -460,18 +460,32 @@ function renderDossier(f) {
   const deals = (f.deals || [])
     .slice()
     .sort((a, b) => String(b.announced_on || '').localeCompare(String(a.announced_on || '')))
-    .map((d) => `<tr>
-      <td>${esc(d.company)}</td><td>${esc(d.round || '')}</td><td>${esc(d.amount || '')}</td>
+    .map((d) => {
+      const hover = [
+        d.via_contact ? `via ${d.via_contact}` : '',
+        d.co_investors ? `Co-investors: ${d.co_investors}` : '',
+      ].filter(Boolean).join(' · ');
+      return `<tr${hover ? ` title="${esc(hover)}"` : ''}>
+      <td>${esc(d.company)}${d.co_investors ? ' <span class="dim">👥</span>' : ''}</td>
+      <td>${esc(d.round || '')}</td><td>${esc(d.amount || '')}</td>
       <td>${esc(d.role || '')}</td><td class="dim">${esc(d.announced_on || '')}</td>
-      <td>${d.source_url ? `<a href="${esc(d.source_url)}" target="_blank" rel="noopener noreferrer">↗</a>` : ''}</td>
-    </tr>`).join('');
+      <td>${d.source_url ? `<a href="${esc(d.source_url)}" target="_blank" rel="noopener noreferrer">↗</a>` : `<span class="dim">${esc(d.source || '')}</span>`}</td>
+    </tr>`;
+    }).join('');
 
-  const contacts = (f.contacts || []).map((c) => `<tr>
-    <td>${esc(c.name)}${c.is_primary ? ' ★' : ''}</td><td>${esc(c.title || '')}</td>
+  const contacts = (f.contacts || []).map((c) => {
+    const links = [
+      c.linkedin_url ? `<a href="${esc(c.linkedin_url)}" target="_blank" rel="noopener noreferrer">LinkedIn</a>` : '',
+      c.signal_url ? `<a href="${esc(c.signal_url)}" target="_blank" rel="noopener noreferrer">Signal</a>` : '',
+    ].filter(Boolean).join(' · ');
+    return `<tr>
+    <td>${esc(c.name)}${c.is_primary ? ' ★' : ''}</td>
+    <td>${esc(c.title || '')}${c.notes ? `<div class="dim c-notes">${esc(c.notes)}</div>` : ''}</td>
     <td>${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : '—'}</td>
-    <td>${c.linkedin_url ? `<a href="${esc(c.linkedin_url)}" target="_blank" rel="noopener noreferrer">LinkedIn</a>` : ''}</td>
+    <td>${links}</td>
     <td class="dim">${esc(c.source || '')}</td>
-  </tr>`).join('');
+  </tr>`;
+  }).join('');
 
   const news = (f.news_items || [])
     .slice()
