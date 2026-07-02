@@ -7,13 +7,15 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { parseCSV, serializeCSV } from './csv.mjs';
 import { sbSelect, sbUpdate } from './db.mjs';
 import { startTier, TIER_LABEL } from './tiers.mjs';
+import { importCsvText } from './importer.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const PORT = 5173;
+const PORT = Number(process.env.PORT || 5173);
 const OUTPUT_CSV = 'Innovera-SeriesA-targets-scored.csv';
 
 const STATIC = {
@@ -103,6 +105,53 @@ async function handlePatchFirm(res, id, body) {
 
 async function handleDigests(res) {
   sendJson(res, 200, { digests: await sbSelect('digests?select=*&order=created_at.desc&limit=10') });
+}
+
+/* ---- CSV upload + scoring runner ---- */
+
+async function handleUpload(res, body) {
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch (err) {
+    return sendJson(res, 400, { error: 'Bad JSON: ' + String(err) });
+  }
+  if (typeof payload.csv !== 'string' || !payload.csv.trim()) {
+    return sendJson(res, 400, { error: 'No CSV in request.' });
+  }
+  const result = await importCsvText(payload.csv, { source: payload.source || 'happenstance' });
+  sendJson(res, 200, result);
+}
+
+// Scoring runs as a detached child so a long run survives page reloads.
+// One at a time; progress goes to scoring.log and the DB itself.
+let scoreChild = null;
+const SCORE_LOG = path.join(ROOT, 'scoring.log');
+
+function scoreRunning() {
+  return scoreChild !== null && scoreChild.exitCode === null;
+}
+
+function handleStartScore(res) {
+  if (scoreRunning()) return sendJson(res, 200, { started: false, running: true });
+  const log = fs.openSync(SCORE_LOG, 'w');
+  scoreChild = spawn(process.execPath, [path.join(ROOT, 'score.mjs')], {
+    cwd: ROOT,
+    stdio: ['ignore', log, log],
+  });
+  scoreChild.on('exit', () => fs.closeSync(log));
+  sendJson(res, 200, { started: true, running: true, log: SCORE_LOG });
+}
+
+async function handleScoreStatus(res) {
+  const unscored = await sbSelect('firms?fit=is.null&select=id');
+  const total = await sbSelect('firms?select=id');
+  let tail = '';
+  try {
+    const logText = fs.readFileSync(SCORE_LOG, 'utf8');
+    tail = logText.split('\n').filter(Boolean).slice(-5).join('\n');
+  } catch { /* no log yet */ }
+  sendJson(res, 200, { unscored: unscored.length, total: total.length, running: scoreRunning(), tail });
 }
 
 function readBody(req, cb) {
@@ -196,6 +245,18 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && pathname === '/api/digests') {
     handleDigests(res).catch(fail);
+    return;
+  }
+  if (req.method === 'POST' && pathname === '/api/upload') {
+    readBody(req, (body) => handleUpload(res, body).catch(fail));
+    return;
+  }
+  if (req.method === 'POST' && pathname === '/api/score') {
+    try { handleStartScore(res); } catch (err) { fail(err); }
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/api/score-status') {
+    handleScoreStatus(res).catch(fail);
     return;
   }
 

@@ -15,6 +15,7 @@
       <button class="btn" id="toBoard">▦ Board</button>
       <button class="btn" id="toDirectory">▤ VCs</button>
       <button class="btn" id="toDigest">📰 Digest</button>
+      <button class="btn" id="toUpload">⬆ Upload</button>
       <button class="btn ghost" id="resetBtn" title="Reset all to starting tiers">↺ Reset</button>
     </div>
   </header>
@@ -71,6 +72,25 @@
     <!-- Digest view -->
     <section id="digestView" hidden>
       <div class="panel" id="digests"></div>
+    </section>
+
+    <!-- Upload view -->
+    <section id="uploadView" hidden>
+      <div class="panel">
+        <h2 class="u-title">Upload a target list</h2>
+        <p class="dim">CSV with at least a firm-name column (<code>VC</code>/<code>Firm</code>/<code>Fund</code>…).
+          Recognized extras: Contact, Title, Email, LinkedIn, Location, Website, Proximity, Tier, scores.
+          Duplicates (by firm name) merge with what's already in the database.</p>
+        <div class="u-row">
+          <input type="file" id="uploadFile" accept=".csv,text/csv" />
+          <button class="btn primary" id="uploadBtn">Import to database</button>
+        </div>
+        <div id="uploadResult" class="u-result"></div>
+        <div class="u-row">
+          <button class="btn" id="scoreBtn" hidden>▶ Score unscored firms</button>
+        </div>
+        <pre id="scoreStatus" class="u-log" hidden></pre>
+      </div>
     </section>
   </main>
 

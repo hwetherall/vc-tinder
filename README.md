@@ -7,7 +7,9 @@ backed by Supabase (project `vc-tinder` on the Innovera org).
 ## Run
 
 ```bash
-node server.mjs               # swipe/board UI at http://localhost:5173
+node server.mjs               # UI at http://localhost:5173 (PORT env overrides)
+node importer.mjs <file.csv>  # import any target-list CSV (or use the ⬆ Upload view)
+node score.mjs                # score all unscored firms (concurrent, restart-safe)
 node discover.mjs --dry-run   # find new candidate firms (Exa) — print only
 node discover.mjs             # score candidates, write to Supabase
 node enrich.mjs --dry-run     # enrichment work list (facts, deals, contacts, emails)
@@ -16,9 +18,15 @@ node monitor.mjs              # sweep news for watched firms + write weekly dige
 node signal-ingest.mjs <url>  # ingest a Signal NFX investor profile (URL or saved .html)
 node export.mjs               # Attio-ready companies + people CSVs into exports/
 node import-connections.mjs   # import harrys-connections.md (research + score new firms)
-node import-csv.mjs           # one-time CSV import (idempotent, safe to re-run)
 node --test                   # tests
 ```
+
+## New-list flow (fresh Happenstance export)
+
+Upload the CSV in the **⬆ Upload** view (or `node importer.mjs file.csv`) →
+click **Score** (or `node score.mjs`) → triage in Swipe/Board → `node enrich.mjs
+--tiers 1,2` then `--stages emails --tiers 1,2` → `node export.mjs` for the
+Attio-ready output. A full database backup lives in `backups/` (gitignored).
 
 ## Setup
 

@@ -42,7 +42,7 @@ function val(card, name) {
 const $ = (id) => document.getElementById(id);
 const deckEl = () => $('deck');
 
-const VIEWS = ['swipeView', 'boardView', 'dirView', 'dossierView', 'digestView'];
+const VIEWS = ['swipeView', 'boardView', 'dirView', 'dossierView', 'digestView', 'uploadView'];
 function showView(id) {
   for (const v of VIEWS) $(v).hidden = v !== id;
 }
@@ -579,6 +579,67 @@ async function goDigest() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Upload view                                                         */
+/* ------------------------------------------------------------------ */
+
+let statusTimer = null;
+
+function goUpload() {
+  showView('uploadView');
+  refreshScoreStatus();
+}
+
+async function doUpload() {
+  const input = $('uploadFile');
+  const out = $('uploadResult');
+  if (!input.files || !input.files[0]) { out.textContent = 'Pick a CSV file first.'; return; }
+  out.textContent = 'Importing…';
+  try {
+    const csv = await input.files[0].text();
+    const res = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csv }),
+    });
+    const r = await res.json();
+    if (r.error) throw new Error(r.error);
+    out.innerHTML =
+      `✓ Imported <b>${r.firmsImported}</b> new firms (${r.firmsDuplicate} already present), ` +
+      `<b>${r.contactsImported}</b> contacts.` +
+      (r.rowsSkipped ? ` ${r.rowsSkipped} rows had no firm name.` : '') +
+      (r.ignoredColumns.length ? `<br><span class="dim">Ignored columns: ${esc(r.ignoredColumns.join(', '))}</span>` : '') +
+      `<br>Database: ${r.totalFirms} firms, <b>${r.unscored}</b> unscored.`;
+    dir.firms = null; // directory cache is stale now
+    refreshScoreStatus();
+  } catch (err) {
+    out.textContent = '✗ ' + err.message;
+  }
+}
+
+async function refreshScoreStatus() {
+  const res = await fetch('/api/score-status');
+  const s = await res.json();
+  $('scoreBtn').hidden = !(s.unscored > 0 && !s.running);
+  $('scoreBtn').textContent = `▶ Score ${s.unscored} unscored firms`;
+  const box = $('scoreStatus');
+  if (s.running || s.tail) {
+    box.hidden = false;
+    box.textContent = `${s.running ? '⏳ scoring running' : 'scorer idle'} — ${s.total - s.unscored}/${s.total} scored\n${s.tail || ''}`;
+  } else {
+    box.hidden = true;
+  }
+  clearTimeout(statusTimer);
+  if (s.running && !$('uploadView').hidden) {
+    statusTimer = setTimeout(refreshScoreStatus, 5000);
+  }
+}
+
+async function startScoring() {
+  await fetch('/api/score', { method: 'POST' });
+  refreshScoreStatus();
+}
+
+/* ------------------------------------------------------------------ */
 /* Export                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -636,6 +697,9 @@ function wireEvents() {
   $('toSwipe').addEventListener('click', goSwipe);
   $('toDirectory').addEventListener('click', goDirectory);
   $('toDigest').addEventListener('click', goDigest);
+  $('toUpload').addEventListener('click', goUpload);
+  $('uploadBtn').addEventListener('click', doUpload);
+  $('scoreBtn').addEventListener('click', startScoring);
   $('exportBtn').addEventListener('click', exportCsv);
   $('resetBtn').addEventListener('click', resetAll);
   $('dirSearch').addEventListener('input', (e) => { dir.q = e.target.value; if (dir.firms) renderDirectory(); });

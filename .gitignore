@@ -19,3 +19,5 @@ Innovera-SeriesA-targets-scored.csv
 *.xlsx
 ~$*
 exports/
+backups/
+scoring.log
