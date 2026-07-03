@@ -76,6 +76,10 @@ async function init() {
   }
   wireEvents();
   renderSwipe();
+  try {
+    const v = await (await fetch('/api/version')).json();
+    $('ver').textContent = v.version || '';
+  } catch { $('ver').textContent = 'server outdated!'; }
 }
 
 function loadCsv(text) {
@@ -258,6 +262,15 @@ const DIR_CLASS = {
   jump: 'exit-jump',
 };
 
+// Persist a tier decision immediately (fire-and-forget, like proximity).
+// The board's bulk "Export CSV to repo" remains as belt-and-braces.
+function persistTier(card) {
+  const id = val(card, 'Firm ID');
+  if (!id) return;
+  patchFirm(id, { current_tier: card.currentTier })
+    .catch((err) => alert(`Tier not saved for ${val(card, 'VC')}: ${err.message}`));
+}
+
 function decide(kind, value) {
   if (state.animating || state.pos >= state.cards.length) return;
   const card = state.cards[state.pos];
@@ -271,6 +284,7 @@ function decide(kind, value) {
     case 'reject':  card.currentTier = 5; dir = 'down'; break;
     case 'set':     card.currentTier = value; dir = 'jump'; break;
   }
+  if (kind !== 'keep') persistTier(card);
 
   const el = $('activeCard');
   if (el) {
@@ -292,6 +306,7 @@ function undo() {
   const h = state.history.pop();
   state.pos = Math.max(0, state.pos - 1);
   state.cards[state.pos].currentTier = h.tierBefore;
+  persistTier(state.cards[state.pos]);
   renderSwipe();
 }
 
@@ -336,7 +351,7 @@ function renderBoard() {
       col.classList.remove('drop');
       const idx = Number(e.dataTransfer.getData('text/plain'));
       const card = state.cards.find((c) => c.idx === idx);
-      if (card) { card.currentTier = t; renderBoard(); }
+      if (card) { card.currentTier = t; persistTier(card); renderBoard(); }
     });
 
     board.appendChild(col);
@@ -363,10 +378,10 @@ function miniCard(card) {
   });
   el.addEventListener('dragend', () => el.classList.remove('dragging'));
   el.querySelector('.nudge.up').addEventListener('click', () => {
-    card.currentTier = Math.max(1, card.currentTier - 1); renderBoard();
+    card.currentTier = Math.max(1, card.currentTier - 1); persistTier(card); renderBoard();
   });
   el.querySelector('.nudge.down').addEventListener('click', () => {
-    card.currentTier = Math.min(5, card.currentTier + 1); renderBoard();
+    card.currentTier = Math.min(5, card.currentTier + 1); persistTier(card); renderBoard();
   });
   return el;
 }

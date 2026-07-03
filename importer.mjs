@@ -21,7 +21,7 @@ import { normalizeName, normalizeDomain } from './discover.mjs';
 
 // Recognized columns -> canonical keys. Matching is case/space-insensitive.
 const COLUMN_ALIASES = {
-  name: ['vc', 'firm', 'fund', 'company', 'firm name', 'fund name'],
+  name: ['vc', 'firm', 'fund', 'company', 'firm name', 'fund name', 'current company'],
   tier_label: ['tier'],
   proximity: ['proximity'],
   fit: ['fit'],
@@ -37,10 +37,26 @@ const COLUMN_ALIASES = {
   intro_path: ['intro path', 'intro', 'mutuals'],
   evidence: ['evidence'],
   contact: ['contact', 'person', 'contact name'],
-  contact_title: ['title', 'role', 'position'],
+  contact_first: ['first name'],
+  contact_last: ['last name'],
+  contact_title: ['title', 'role', 'position', 'current title'],
   contact_email: ['email', 'work email'],
   contact_linkedin: ['linkedin', 'linkedin url', 'linkedin profile'],
   contact_notes: ['quotes', 'notes', 'bio'],
+  // Happenstance trait columns (Yes/No pre-screens) — folded into contact notes.
+  trait_partner: ['trait gppartnerangel'],
+  trait_lead: ['trait series a lead'],
+  trait_focus: ['trait aib2bsaas focus'],
+  trait_geo: ['trait uswest coast'],
+  trait_vc: ['trait excl nonvcniche'],
+};
+
+const TRAIT_LABELS = {
+  trait_partner: 'GP/Partner',
+  trait_lead: 'Series A lead',
+  trait_focus: 'AI/B2B/SaaS',
+  trait_geo: 'US/West Coast',
+  trait_vc: 'real VC (not excluded type)',
 };
 
 export function mapHeader(header) {
@@ -114,17 +130,30 @@ export function rowsToRecords(rows, { source = 'happenstance' } = {}) {
       });
     }
     const rec = firms.get(key);
-    const parsed = parseContactCell(get(row, 'contact'));
+    // Contact: single "Name - Title" cell, or split First/Last Name columns
+    // (Happenstance's person-keyed exports). Trailing ", MBA"-style suffixes drop.
+    let parsed = parseContactCell(get(row, 'contact'));
+    if (!parsed && (get(row, 'contact_first') || get(row, 'contact_last'))) {
+      const name = [get(row, 'contact_first'), get(row, 'contact_last').split(',')[0].trim()]
+        .filter(Boolean).join(' ');
+      if (name) parsed = { name, title: null };
+    }
     if (parsed) {
       const already = rec.contacts.find((c) => c.name.toLowerCase() === parsed.name.toLowerCase());
       if (!already) {
+        const traits = Object.keys(TRAIT_LABELS)
+          .filter((k) => map[k] != null)
+          .map((k) => `${TRAIT_LABELS[k]}: ${get(row, k) || '?'}`)
+          .join(', ');
+        const notes = [get(row, 'contact_notes'), traits ? `Happenstance traits — ${traits}` : '']
+          .filter(Boolean).join('\n').slice(0, 2000) || null;
         rec.contacts.push({
           name: parsed.name,
           title: get(row, 'contact_title') || parsed.title || null,
           email: get(row, 'contact_email') || null,
           email_status: get(row, 'contact_email') ? 'unknown' : undefined,
           linkedin_url: get(row, 'contact_linkedin') || null,
-          notes: get(row, 'contact_notes') || null,
+          notes,
           is_primary: rec.contacts.length === 0,
           intro_path: get(row, 'intro_path') || null,
           source,

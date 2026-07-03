@@ -1,11 +1,13 @@
-// VC Tinder — Attio export.
-// Flattens the database into two Attio-importable CSVs (Companies + People),
-// written to exports/ with today's date. Gate-tier firms are excluded unless
-// --all is passed; everything else, including enrichment columns and the
-// latest deals, goes along for the ride.
+// VC Tinder — exports.
+// 1) Two Attio-importable CSVs (Companies + People): Gate-tier firms excluded
+//    unless --all is passed.
+// 2) Two complete JSON data dumps (nothing omitted — every firm with its
+//    contacts, deals, news items, scores, and evidence, plus all digests):
+//    dump-all-YYYY-MM-DD.json (all firms, gated included) and
+//    dump-tier1-2-YYYY-MM-DD.json (priority firms only).
 //
-//   node export.mjs           # exports/attio-companies-YYYY-MM-DD.csv + attio-people-...
-//   node export.mjs --all     # include Gate (tier 5) firms too
+//   node export.mjs           # all four files into exports/
+//   node export.mjs --all     # CSVs include Gate (tier 5) firms too
 
 import fs from 'fs';
 import path from 'path';
@@ -99,7 +101,7 @@ async function main() {
   loadEnv();
   const all = process.argv.includes('--all');
   const firms = await sbSelect(
-    'firms?select=*,contacts(*),deals(company,round,role,announced_on)&order=fit.desc.nullslast'
+    'firms?select=*,contacts(*),deals(*),news_items(*)&order=fit.desc.nullslast'
   );
   const included = firms.filter((f) => all || effectiveTier(f) < 5);
 
@@ -112,9 +114,28 @@ async function main() {
   const people = included.flatMap(peopleRows);
   fs.writeFileSync(peoplePath, serializeCSV([PEOPLE_COLS, ...people]), 'utf8');
 
-  console.log(`Exported ${included.length} firms (${firms.length - included.length} Gate-tier excluded${all ? '' : '; --all to include'}).`);
+  // Complete JSON dumps: the whole database, nested and unabridged.
+  const digests = await sbSelect('digests?select=*&order=created_at.desc');
+  const withTier = firms.map((f) => ({ effective_tier: effectiveTier(f), ...f }));
+  const tier12 = withTier.filter((f) => f.effective_tier <= 2);
+  const dump = (firmList, extra = {}) => JSON.stringify({
+    generated_at: new Date().toISOString(),
+    firm_count: firmList.length,
+    contact_count: firmList.reduce((n, f) => n + (f.contacts || []).length, 0),
+    deal_count: firmList.reduce((n, f) => n + (f.deals || []).length, 0),
+    firms: firmList,
+    ...extra,
+  }, null, 1);
+  const dumpAllPath = path.join(OUT_DIR, `dump-all-${date}.json`);
+  const dumpT12Path = path.join(OUT_DIR, `dump-tier1-2-${date}.json`);
+  fs.writeFileSync(dumpAllPath, dump(withTier, { digests }), 'utf8');
+  fs.writeFileSync(dumpT12Path, dump(tier12), 'utf8');
+
+  console.log(`Exported ${included.length} firms to CSV (${firms.length - included.length} Gate-tier excluded${all ? '' : '; --all to include'}).`);
   console.log(`  ${companiesPath}`);
   console.log(`  ${peoplePath} (${people.length} people)`);
+  console.log(`  ${dumpAllPath} (${withTier.length} firms, complete)`);
+  console.log(`  ${dumpT12Path} (${tier12.length} tier 1-2 firms, complete)`);
 }
 
 // Run only when invoked directly (not when imported by tests).

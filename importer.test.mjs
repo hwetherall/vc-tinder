@@ -44,6 +44,23 @@ test('rowsToRecords groups multiple people at one firm; first contact is primary
   assert.equal(accel.firm.source, 'test');
 });
 
+test('rowsToRecords handles Happenstance person-keyed exports (split names, traits)', () => {
+  const rows = [
+    ['﻿First Name', 'Last Name', 'Current Company', 'Current Title', 'LinkedIn URL', 'Trait: GP/Partner/Angel', 'Trait: Series A Lead', 'Quotes', 'Mutuals'],
+    ['Zamir', 'Shukho, MBA', 'Vibranium Venture Capital', 'General Partner & Founder', 'https://linkedin.com/in/z', 'Yes', 'Yes', 'SF-based GP.', 'Kamran (strong)'],
+  ];
+  const { firms } = rowsToRecords(rows, { source: 'happenstance' });
+  const rec = firms.get('vibranium');
+  assert.ok(rec, 'BOM on first header must not break firm mapping');
+  const c = rec.contacts[0];
+  assert.equal(c.name, 'Zamir Shukho');                    // suffix stripped
+  assert.equal(c.title, 'General Partner & Founder');
+  assert.ok(c.notes.includes('SF-based GP.'));
+  assert.ok(c.notes.includes('GP/Partner: Yes'));          // traits preserved
+  assert.ok(c.notes.includes('Series A lead: Yes'));
+  assert.equal(c.intro_path, 'Kamran (strong)');
+});
+
 test('rowsToRecords throws a clear error when no name column exists', () => {
   assert.throws(() => rowsToRecords([['Person', 'Email'], ['a', 'b']]), /no firm-name column/);
 });

@@ -16,6 +16,9 @@ import { importCsvText } from './importer.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 5173);
+// Bump when server/UI behavior changes — shown in the topbar so a stale
+// server or cached front-end is immediately visible.
+const VERSION = 'v6 autosave';
 const OUTPUT_CSV = 'Innovera-SeriesA-targets-scored.csv';
 
 const STATIC = {
@@ -228,6 +231,9 @@ const server = http.createServer((req, res) => {
 
   const fail = (err) => sendJson(res, 500, { error: String(err) });
 
+  if (req.method === 'GET' && pathname === '/api/version') {
+    return sendJson(res, 200, { version: VERSION });
+  }
   if (req.method === 'GET' && pathname === '/api/firms') {
     handleFirms(res).catch(fail);
     return;

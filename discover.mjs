@@ -119,9 +119,16 @@ export function deriveTier(s) {
 const RUBRIC = `Score this VC firm for Innovera's $10m Series A at a $100m valuation.
 Innovera sells AI tooling to VCs and corporate innovation teams; the ideal lead
 is a focused early-stage AI/fintech/data-infra fund that writes $5-7m lead checks,
-can price a $100m round, and opens customer doors. Fill each sub-score from the
-evidence only — do NOT invent facts. If the evidence is thin, score conservatively
-and set lead_capability_confidence to "low".
+can price a $100m round, and opens customer doors.
+
+Fill each sub-score using BOTH the evidence below AND your own knowledge of this
+firm. For well-known firms (Sand Hill Road tier, decades of track record), your
+knowledge is often better than a homepage scrape — use it, and cite it in the
+evidence field as "widely known: ...". Do NOT invent facts about firms you don't
+recognize: if the firm is unfamiliar AND the evidence is thin, score conservatively
+and set lead_capability_confidence to "low". Never give a middling score just
+because information is missing — either you know it, the evidence shows it, or
+you score low with low confidence and say why.
 
 Sub-scores (max): thesis_fit /25, network /25, lead_capability /25, location /15, gravitas /10.
 Gates: is_fund (a real venture fund, not an accelerator/PE/family office),
@@ -166,7 +173,7 @@ const SCORE_SCHEMA = {
 
 export async function scoreFirm(candidate, evidenceText) {
   const shape = '{"thesis_fit":<0-25>,"network":<0-25>,"lead_capability":<0-25>,"location":<0-15>,"gravitas":<0-10>,"is_fund":<true|false>,"is_accelerator":<true|false>,"writes_500k_plus":<true|false>,"does_series_a":<true|false>,"lead_capability_confidence":"low|med|high","evidence":{"thesis":"<claim + url>","network":"...","lead":"...","location":"...","gravitas":"..."},"note":"<one line>"}';
-  const prompt = `${RUBRIC}\n\nFirm: ${candidate.name}\nWebsite: ${candidate.url}\n\nEvidence (from the firm's site):\n${evidenceText.slice(0, 4000)}\n\nReturn ONLY a JSON object with these EXACT top-level keys — flat, NOT nested under "scores"/"gates", no markdown fences:\n${shape}`;
+  const prompt = `${RUBRIC}\n\nFirm: ${candidate.name}\nWebsite: ${candidate.url}\n\nEvidence (firm website + web search):\n${evidenceText.slice(0, 6000)}\n\nReturn ONLY a JSON object with these EXACT top-level keys — flat, NOT nested under "scores"/"gates", no markdown fences:\n${shape}`;
   return normalizeScore(await chatJSON(prompt));
 }
 

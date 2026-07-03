@@ -23,7 +23,10 @@ import { effectiveTier } from './tiers.mjs';
 import { normalizeDomain } from './discover.mjs';
 import { enrichContact, PROVIDER } from './ninjapear/ninjapear.mjs';
 
-const ALL_STAGES = ['facts', 'deals', 'contacts', 'emails'];
+const ALL_STAGES = ['facts', 'deals', 'contacts', 'emails', 'location'];
+
+// Location fill is cheap and high-volume, so it runs on a lighter model.
+const LOCATION_MODEL = process.env.LOCATION_MODEL || 'anthropic/claude-sonnet-5';
 
 /* ------------------------------------------------------------------ */
 /* Pure helpers (exported for tests)                                   */
@@ -169,6 +172,27 @@ async function stageContacts(firm) {
   return `contacts: + ${raw.name} (${raw.title || '?'})`;
 }
 
+// HQ location via one web search + Sonnet (with model knowledge for the famous
+// firms). Only fills blanks — existing locations are never overwritten.
+async function stageLocation(firm) {
+  if (firm.location) return `location: already set (${firm.location})`;
+  let blob = '';
+  try {
+    const results = await exaSearchNews(`"${firm.name}" venture capital firm headquarters`, { numResults: 3, category: null });
+    blob = results.map((r) => `${r.title} (${r.url})\n${r.text.slice(0, 400)}`).join('\n---\n');
+  } catch { /* search is best-effort; the model may know anyway */ }
+  const raw = await chatJSON(
+    `Where is the venture capital firm "${firm.name}"${firm.website ? ` (${firm.website})` : ''} headquartered?\n` +
+    `Use the search results below AND your own knowledge of the firm. If you genuinely ` +
+    `cannot tell, return null — do not guess.\n\n${blob.slice(0, 4000)}\n\n` +
+    `Return ONLY this JSON, no markdown fences: {"location":"<City, State or Country>"} or {"location":null}`,
+    { model: LOCATION_MODEL, maxTokens: 200 }
+  );
+  if (!raw.location) return 'location: not found';
+  await sbUpdate(`firms?id=eq.${firm.id}`, { location: String(raw.location).slice(0, 120) });
+  return `location: ${raw.location}`;
+}
+
 async function stageEmails(firm) {
   const targets = await sbSelect(
     `contacts?firm_id=eq.${firm.id}&email=is.null&select=id,name,title,linkedin_url`
@@ -234,22 +258,27 @@ async function main() {
     return;
   }
 
+  // Only stages that read the firm's site need a resolved website; location and
+  // deals search by name, so a website-less (e.g. gated) firm still gets them.
+  const needsWebsite = args.stages.some((s) => ['facts', 'contacts', 'emails'].includes(s));
   const totals = { ok: 0, failed: 0 };
   for (const f of firms) {
     console.log(`\n${f.name} (tier ${effectiveTier(f)})`);
     let firm = f;
-    try {
-      firm = await ensureWebsite(firm);
-      if (firm.websiteResolved) console.log(`  resolved website: ${firm.website}`);
-    } catch (err) {
-      console.log(`  ! website: ${err.message} — skipping firm`);
-      totals.failed++;
-      continue;
+    if (needsWebsite) {
+      try {
+        firm = await ensureWebsite(firm);
+        if (firm.websiteResolved) console.log(`  resolved website: ${firm.website}`);
+      } catch (err) {
+        console.log(`  ! website: ${err.message} — skipping firm`);
+        totals.failed++;
+        continue;
+      }
     }
     for (const stage of args.stages) {
       if (stage === 'facts' && firm.enriched_at && !args.force) { console.log('  facts: already enriched, skipped (--force to redo)'); continue; }
       try {
-        const summary = await ({ facts: stageFacts, deals: stageDeals, contacts: stageContacts, emails: stageEmails })[stage](firm);
+        const summary = await ({ facts: stageFacts, deals: stageDeals, contacts: stageContacts, emails: stageEmails, location: stageLocation })[stage](firm);
         console.log(`  ${summary}`);
         totals.ok++;
       } catch (err) {

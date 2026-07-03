@@ -59,16 +59,17 @@ export async function exaSearch(query, { numResults = 8, category = 'company', i
   return (data.results || []).map((r) => ({ url: r.url, title: r.title || '' }));
 }
 
-// News search with snippets in one call — used by the deals/monitor stages.
+// Search with snippets in one call — used by the deals/monitor/scoring stages.
+// Defaults to news; pass category: null for a general web search with contents.
 // Returns [{url, title, publishedDate, text}].
-export async function exaSearchNews(query, { numResults = 10, startPublishedDate } = {}) {
+export async function exaSearchNews(query, { numResults = 10, startPublishedDate, category = 'news' } = {}) {
   const body = {
     query,
     numResults,
-    category: 'news',
     type: 'auto',
     contents: { text: { maxCharacters: 1500 } },
   };
+  if (category) body.category = category;
   if (startPublishedDate) body.startPublishedDate = startPublishedDate;
   const data = await fetchJSON('https://api.exa.ai/search', {
     method: 'POST',
