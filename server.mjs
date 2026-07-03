@@ -6,6 +6,7 @@
 
 import http from 'http';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -16,9 +17,12 @@ import { importCsvText } from './importer.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 5173);
+// On Vercel the deployment filesystem is read-only except for the OS tmp dir,
+// so any runtime file writes (scoring log, exported CSV) must land there.
+const WRITABLE = process.env.VERCEL ? os.tmpdir() : ROOT;
 // Bump when server/UI behavior changes — shown in the topbar so a stale
 // server or cached front-end is immediately visible.
-const VERSION = 'v6 autosave';
+const VERSION = 'v7 directory';
 const OUTPUT_CSV = 'Innovera-SeriesA-targets-scored.csv';
 
 const STATIC = {
@@ -129,7 +133,7 @@ async function handleUpload(res, body) {
 // Scoring runs as a detached child so a long run survives page reloads.
 // One at a time; progress goes to scoring.log and the DB itself.
 let scoreChild = null;
-const SCORE_LOG = path.join(ROOT, 'scoring.log');
+const SCORE_LOG = path.join(WRITABLE, 'scoring.log');
 
 function scoreRunning() {
   return scoreChild !== null && scoreChild.exitCode === null;
@@ -158,6 +162,14 @@ async function handleScoreStatus(res) {
 }
 
 function readBody(req, cb) {
+  // On Vercel the Node runtime has already consumed and parsed the request
+  // stream into req.body, so listening for 'data'/'end' would hang. Reuse it,
+  // re-stringifying objects so downstream JSON.parse still works.
+  if (req.body !== undefined && req.body !== null) {
+    if (typeof req.body === 'string') return cb(req.body);
+    if (Buffer.isBuffer(req.body)) return cb(req.body.toString('utf8'));
+    return cb(JSON.stringify(req.body));
+  }
   let body = '';
   req.setEncoding('utf8');
   req.on('data', (chunk) => {
@@ -199,7 +211,7 @@ async function handleSave(res, csv) {
       updated++;
     }
   }
-  const outPath = path.join(ROOT, OUTPUT_CSV);
+  const outPath = path.join(WRITABLE, OUTPUT_CSV);
   fs.writeFileSync(outPath, csv, 'utf8');
   sendJson(res, 200, { path: outPath, updated, bytes: Buffer.byteLength(csv, 'utf8') });
 }
@@ -207,7 +219,7 @@ async function handleSave(res, csv) {
 // Reset: clear saved tiers in the DB and delete the exported CSV.
 async function handleReset(res) {
   await sbUpdate('firms?id=not.is.null', { current_tier: null });
-  const outPath = path.join(ROOT, OUTPUT_CSV);
+  const outPath = path.join(WRITABLE, OUTPUT_CSV);
   const existed = fs.existsSync(outPath);
   if (existed) fs.unlinkSync(outPath);
   sendJson(res, 200, { deleted: existed, path: outPath });
@@ -225,14 +237,26 @@ function sendText(res, status, text, type) {
   res.end(text);
 }
 
-const server = http.createServer((req, res) => {
+// Exported so a Vercel serverless function (api/[...path].mjs) can delegate to
+// the exact same routing used by the local `node server.mjs` dev server.
+export function handler(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const pathname = url.pathname;
 
   const fail = (err) => sendJson(res, 500, { error: String(err) });
 
+  // The Vercel deployment is a read-only viewer (VCs + Digest). Mutation and
+  // tooling endpoints exist only for the local operator tool; block them there.
+  if (process.env.VERCEL) {
+    const isFirmPatch = pathname === '/api/firm' && req.method === 'PATCH';
+    const isWriteRoute = ['/api/upload', '/api/score', '/api/score-status', '/api/save'].includes(pathname);
+    if (isFirmPatch || isWriteRoute) {
+      return sendJson(res, 403, { error: 'Read-only deployment.' });
+    }
+  }
+
   if (req.method === 'GET' && pathname === '/api/version') {
-    return sendJson(res, 200, { version: VERSION });
+    return sendJson(res, 200, { version: VERSION, readonly: !!process.env.VERCEL });
   }
   if (req.method === 'GET' && pathname === '/api/firms') {
     handleFirms(res).catch(fail);
@@ -304,10 +328,14 @@ const server = http.createServer((req, res) => {
   }
 
   sendText(res, 404, 'Not found');
-});
+}
 
-server.listen(PORT, () => {
-  console.log(`\n  VC Tinder running →  http://localhost:${PORT}`);
-  console.log(`  Source: Supabase (${process.env.SUPABASE_URL || 'set SUPABASE_URL in .env'})`);
-  console.log(`  Exports to: ${OUTPUT_CSV}\n`);
-});
+// Local dev only. On Vercel the platform invokes `handler` per-request, so we
+// must not bind a port there.
+if (!process.env.VERCEL) {
+  http.createServer(handler).listen(PORT, () => {
+    console.log(`\n  VC Tinder running →  http://localhost:${PORT}`);
+    console.log(`  Source: Supabase (${process.env.SUPABASE_URL || 'set SUPABASE_URL in .env'})`);
+    console.log(`  Exports to: ${OUTPUT_CSV}\n`);
+  });
+}

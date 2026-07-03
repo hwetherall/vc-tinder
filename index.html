@@ -3,65 +3,47 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>VC Tinder</title>
+  <title>VC Directory</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="flame">🔥</span> VC&nbsp;Tinder <span class="ver" id="ver"></span></div>
-    <div class="progress" id="progress">—</div>
+    <div class="brand">VC&nbsp;Directory <span class="ver" id="ver"></span></div>
+    <nav class="topbar-nav">
+      <button class="navbtn" id="toDirectory">VCs</button>
+      <button class="navbtn" id="toDigest">Digest</button>
+      <button class="navbtn" id="toUpload">Upload</button>
+    </nav>
     <div class="topbar-actions">
-      <button class="btn" id="toSwipe">▭ Swipe</button>
-      <button class="btn" id="toBoard">▦ Board</button>
-      <button class="btn" id="toDirectory">▤ VCs</button>
-      <button class="btn" id="toDigest">📰 Digest</button>
-      <button class="btn" id="toUpload">⬆ Upload</button>
-      <button class="btn ghost" id="resetBtn" title="Reset all to starting tiers">↺ Reset</button>
+      <button class="btn ghost" id="exportBtn" title="Write the scored CSV back into the repo">Export CSV</button>
+      <button class="btn ghost" id="resetBtn" title="Clear saved tier changes and the exported CSV">Reset</button>
     </div>
   </header>
 
   <main>
-    <!-- Swipe view -->
-    <section id="swipeView">
-      <div class="deck" id="deck"></div>
-
-      <div class="legend">
-        <div class="key"><kbd>→</kbd><span>Promote</span></div>
-        <div class="key"><kbd>←</kbd><span>Demote</span></div>
-        <div class="key"><kbd>↑</kbd><span>Keep</span></div>
-        <div class="key"><kbd>↓</kbd><span>Reject → Tier 5</span></div>
-        <div class="key"><kbd>1</kbd>–<kbd>5</kbd><span>Jump to tier</span></div>
-        <div class="key"><kbd>⌫</kbd><span>Undo</span></div>
+    <!-- Directory view (default) -->
+    <section id="dirView">
+      <div class="dir-controls">
+        <input id="dirSearch" class="search" type="search"
+               placeholder="Search name, location, stage, tags…" autocomplete="off" />
+        <select id="dirTier" class="search select" title="Filter by tier">
+          <option value="0">All tiers</option>
+          <option value="1">Tier 1 · Open now</option>
+          <option value="2">Tier 2 · Cultivate</option>
+          <option value="3">Tier 3 · Follow</option>
+          <option value="4">Tier 4 · Referral</option>
+          <option value="5">Tier 5 · Pass</option>
+        </select>
+        <select id="dirProx" class="search select" title="Filter by proximity">
+          <option value="">Any proximity</option>
+          <option value="Hot">Hot</option>
+          <option value="Warm">Warm</option>
+          <option value="Cold">Cold</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="dirWatched" /> Watched only</label>
+        <span class="dir-count" id="dirCount"></span>
       </div>
-    </section>
-
-    <!-- Board view -->
-    <section id="boardView" hidden>
-      <div class="board" id="board"></div>
-      <div class="board-actions">
-        <button class="btn primary" id="exportBtn">⬇ Export CSV to repo</button>
-        <span class="msg" id="exportMsg"></span>
-      </div>
-    </section>
-
-    <!-- Directory view -->
-    <section id="dirView" hidden>
-      <div class="panel">
-        <div class="dir-controls">
-          <input id="dirSearch" class="search" type="search"
-                 placeholder="Search name, location, tags…" autocomplete="off" />
-          <select id="dirTier" class="search select">
-            <option value="0">All tiers</option>
-            <option value="1">Tier 1 · Open now</option>
-            <option value="2">Tier 2 · Cultivate</option>
-            <option value="3">Tier 3 · Follow</option>
-            <option value="4">Tier 4 · Referral</option>
-            <option value="5">Tier 5 · Pass</option>
-          </select>
-          <span class="dir-count" id="dirCount"></span>
-        </div>
-        <div class="dir-table" id="dirTable"></div>
-      </div>
+      <div class="dir-table" id="dirTable"></div>
     </section>
 
     <!-- Dossier view (single firm) -->
@@ -93,6 +75,8 @@
       </div>
     </section>
   </main>
+
+  <div class="toast" id="toast" hidden></div>
 
   <script type="module" src="/app.js"></script>
 </body>

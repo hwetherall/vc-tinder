@@ -70,6 +70,21 @@ async function ensureWebsite(firm) {
   return { ...firm, website: home.url, domain: home.domain, websiteResolved: true };
 }
 
+async function inferStageFocus(firm) {
+  let blob = '';
+  try {
+    const results = await exaSearch(`"${firm.name}" venture capital investment stage focus`, { numResults: 3 });
+    blob = results.map((r) => `${r.title}\n${r.text.slice(0, 400)}`).join('\n---\n');
+  } catch { /* search is best-effort */ }
+  const raw = await chatJSON(
+    `What investment stages does the venture capital firm "${firm.name}"${firm.website ? ` (${firm.website})` : ''} typically focus on?\n` +
+    `Use the search results below AND your own knowledge of the firm. Return a concise phrase ` +
+    `(e.g. "Seed to Series B"). If you genuinely cannot tell, return null.\n\n${blob.slice(0, 3000)}\n\n` +
+    `Return ONLY this JSON, no markdown fences: {"stage_focus":"<phrase>"|null}`
+  );
+  return raw.stage_focus || null;
+}
+
 async function stageFacts(firm) {
   const { text } = await exaContents(firm.website, 4000);
   if (!text.trim()) throw new Error('no page content');
@@ -86,11 +101,15 @@ async function stageFacts(firm) {
     `never reply in prose.`
   );
   const year = parseInt(raw.founded_year, 10); // parseInt(null/'') -> NaN, unlike Number()
+  let stage_focus = raw.stage_focus || null;
+  if (!stage_focus) stage_focus = await inferStageFocus(firm);
   const patch = {
-    fund_size: raw.fund_size || null,
-    founded_year: Number.isFinite(year) && year > 1800 ? year : null,
-    stage_focus: raw.stage_focus || null,
-    thesis_tags: Array.isArray(raw.thesis_tags) ? raw.thesis_tags.slice(0, 6).map(String) : null,
+    fund_size: raw.fund_size || firm.fund_size || null,
+    founded_year: Number.isFinite(year) && year > 1800 ? year : (firm.founded_year || null),
+    stage_focus,
+    thesis_tags: Array.isArray(raw.thesis_tags) && raw.thesis_tags.length
+      ? raw.thesis_tags.slice(0, 6).map(String)
+      : (firm.thesis_tags || null),
     enriched_at: new Date().toISOString(),
   };
   if (!firm.location && raw.hq_location) patch.location = raw.hq_location;
@@ -276,7 +295,9 @@ async function main() {
       }
     }
     for (const stage of args.stages) {
-      if (stage === 'facts' && firm.enriched_at && !args.force) { console.log('  facts: already enriched, skipped (--force to redo)'); continue; }
+      if (stage === 'facts' && firm.enriched_at && firm.stage_focus && !args.force) {
+        console.log('  facts: already enriched, skipped (--force to redo)'); continue;
+      }
       try {
         const summary = await ({ facts: stageFacts, deals: stageDeals, contacts: stageContacts, emails: stageEmails, location: stageLocation })[stage](firm);
         console.log(`  ${summary}`);

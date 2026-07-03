@@ -1,0 +1,19 @@
+# Keep the Vercel deployment lean: exclude data files, docs, backups and
+# non-runtime scripts. The runtime import graph (server.mjs -> csv/db/tiers/
+# importer/discover/exa/llm) and browser assets (index.html, styles.css,
+# app.js, csv.mjs, tiers.mjs) must NOT be listed here.
+*.csv
+*.xlsx
+*.log
+*.test.mjs
+backups/
+exports/
+ninjapear/
+matt-weingard.html
+previous-conversation.md
+plan.md
+README.md
+.pm/
+.gstack/
+.claude/
+.cursor/
