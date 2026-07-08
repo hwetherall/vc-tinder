@@ -30,6 +30,7 @@ const STATIC = {
   '/index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/styles.css': { file: 'styles.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  '/app-html.mjs': { file: 'app-html.mjs', type: 'text/javascript; charset=utf-8' },
   '/csv.mjs': { file: 'csv.mjs', type: 'text/javascript; charset=utf-8' },
   '/tiers.mjs': { file: 'tiers.mjs', type: 'text/javascript; charset=utf-8' },
 };
@@ -94,6 +95,38 @@ async function handleFirm(res, id) {
 
 // Only these fields are editable from the UI.
 const PATCHABLE = ['proximity', 'current_tier', 'watched'];
+const PROXIMITY_VALUES = new Set(['Hot', 'Warm', 'Cold']);
+const TIER_VALUES = new Set([1, 2, 3, 4, 5]);
+
+export function cleanFirmPatch(patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    return { error: 'Patch must be a JSON object.' };
+  }
+  const clean = {};
+  if ('proximity' in patch) {
+    if (!PROXIMITY_VALUES.has(patch.proximity)) {
+      return { error: 'Invalid proximity (allowed: Hot, Warm, Cold).' };
+    }
+    clean.proximity = patch.proximity;
+  }
+  if ('current_tier' in patch) {
+    if (patch.current_tier !== null && !TIER_VALUES.has(patch.current_tier)) {
+      return { error: 'Invalid current_tier (allowed: 1-5 or null).' };
+    }
+    clean.current_tier = patch.current_tier;
+  }
+  if ('watched' in patch) {
+    if (typeof patch.watched !== 'boolean') {
+      return { error: 'Invalid watched value (must be boolean).' };
+    }
+    clean.watched = patch.watched;
+  }
+  if (Object.keys(clean).length === 0) {
+    return { error: `Nothing to update (allowed: ${PATCHABLE.join(', ')})` };
+  }
+  return { clean };
+}
+
 async function handlePatchFirm(res, id, body) {
   let patch;
   try {
@@ -101,11 +134,8 @@ async function handlePatchFirm(res, id, body) {
   } catch (err) {
     return sendJson(res, 400, { error: 'Bad JSON: ' + String(err) });
   }
-  const clean = {};
-  for (const k of PATCHABLE) if (k in patch) clean[k] = patch[k];
-  if (Object.keys(clean).length === 0) {
-    return sendJson(res, 400, { error: `Nothing to update (allowed: ${PATCHABLE.join(', ')})` });
-  }
+  const { clean, error } = cleanFirmPatch(patch);
+  if (error) return sendJson(res, 400, { error });
   await sbUpdate(`firms?id=eq.${encodeURIComponent(id)}`, clean);
   sendJson(res, 200, { updated: clean });
 }
@@ -205,7 +235,7 @@ async function handleSave(res, csv) {
   for (const r of rows.slice(1)) {
     const id = r[idI];
     const newTier = parseInt(r[newTierI], 10);
-    if (!id || !Number.isFinite(newTier)) continue;
+    if (!id || !TIER_VALUES.has(newTier)) continue;
     if (newTier !== startTier(r[tierI])) {
       await sbUpdate(`firms?id=eq.${encodeURIComponent(id)}`, { current_tier: newTier });
       updated++;
@@ -332,7 +362,7 @@ export function handler(req, res) {
 
 // Local dev only. On Vercel the platform invokes `handler` per-request, so we
 // must not bind a port there.
-if (!process.env.VERCEL) {
+if (!process.env.VERCEL && !process.env.VC_TINDER_NO_LISTEN) {
   http.createServer(handler).listen(PORT, () => {
     console.log(`\n  VC Tinder running →  http://localhost:${PORT}`);
     console.log(`  Source: Supabase (${process.env.SUPABASE_URL || 'set SUPABASE_URL in .env'})`);

@@ -122,3 +122,12 @@ test('normalizeScore handles the flat shape, maps medium->med, and clamps over-m
   assert.equal(s.fit, 25 + 10 + 10 + 5 + 5);
   assert.equal(s.lead_capability_confidence, 'med');
 });
+
+test('normalizeScore falls back to low for unknown confidence labels', () => {
+  const s = normalizeScore({
+    thesis_fit: 10, network: 10, lead_capability: 10, location: 5, gravitas: 5,
+    lead_capability_confidence: 'pretty sure',
+    evidence: {},
+  });
+  assert.equal(s.lead_capability_confidence, 'low');
+});

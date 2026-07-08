@@ -136,41 +136,6 @@ is_accelerator, writes_500k_plus (min check >= $500k), does_series_a (leads or
 participates in Series A at this size). Provide one supporting claim + source URL
 per sub-score.`;
 
-const SCORE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    thesis_fit: { type: 'integer' },
-    network: { type: 'integer' },
-    lead_capability: { type: 'integer' },
-    location: { type: 'integer' },
-    gravitas: { type: 'integer' },
-    is_fund: { type: 'boolean' },
-    is_accelerator: { type: 'boolean' },
-    writes_500k_plus: { type: 'boolean' },
-    does_series_a: { type: 'boolean' },
-    lead_capability_confidence: { type: 'string', enum: ['low', 'med', 'high'] },
-    evidence: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        thesis: { type: 'string' },
-        network: { type: 'string' },
-        lead: { type: 'string' },
-        location: { type: 'string' },
-        gravitas: { type: 'string' },
-      },
-      required: ['thesis', 'network', 'lead', 'location', 'gravitas'],
-    },
-    note: { type: 'string' },
-  },
-  required: [
-    'thesis_fit', 'network', 'lead_capability', 'location', 'gravitas',
-    'is_fund', 'is_accelerator', 'writes_500k_plus', 'does_series_a',
-    'lead_capability_confidence', 'evidence', 'note',
-  ],
-};
-
 export async function scoreFirm(candidate, evidenceText) {
   const shape = '{"thesis_fit":<0-25>,"network":<0-25>,"lead_capability":<0-25>,"location":<0-15>,"gravitas":<0-10>,"is_fund":<true|false>,"is_accelerator":<true|false>,"writes_500k_plus":<true|false>,"does_series_a":<true|false>,"lead_capability_confidence":"low|med|high","evidence":{"thesis":"<claim + url>","network":"...","lead":"...","location":"...","gravitas":"..."},"note":"<one line>"}';
   const prompt = `${RUBRIC}\n\nFirm: ${candidate.name}\nWebsite: ${candidate.url}\n\nEvidence (firm website + web search):\n${evidenceText.slice(0, 6000)}\n\nReturn ONLY a JSON object with these EXACT top-level keys — flat, NOT nested under "scores"/"gates", no markdown fences:\n${shape}`;
@@ -186,6 +151,9 @@ export function normalizeScore(raw) {
   const g = raw.gates || raw;     // gates may be nested under "gates"
   const ev = raw.evidence || {};
   const clamp = (v, max) => Math.max(0, Math.min(max, Math.round(Number(v) || 0)));
+  const confidence = String(raw.lead_capability_confidence || raw.confidence || 'low')
+    .toLowerCase()
+    .replace('medium', 'med');
   const s = {
     thesis_fit: clamp(sc.thesis_fit ?? sc.thesis, 25),
     network: clamp(sc.network, 25),
@@ -196,8 +164,7 @@ export function normalizeScore(raw) {
     is_accelerator: g.is_accelerator === true,
     writes_500k_plus: g.writes_500k_plus !== false,
     does_series_a: g.does_series_a !== false,
-    lead_capability_confidence: String(raw.lead_capability_confidence || raw.confidence || 'low')
-      .toLowerCase().replace('medium', 'med'),
+    lead_capability_confidence: ['low', 'med', 'high'].includes(confidence) ? confidence : 'low',
     evidence: {
       thesis: ev.thesis ?? ev.thesis_fit ?? '',
       network: ev.network ?? '',

@@ -4,6 +4,7 @@
 // This file is loaded as a module (<script type="module"> in index.html).
 import { parseCSV, serializeCSV } from './csv.mjs';
 import { startTier, effectiveTier } from './tiers.mjs';
+import { esc, httpLink, linkifyEsc, mailtoLink, mdToHtml } from './app-html.mjs';
 
 const TIER_LABELS = {
   1: 'Open now',
@@ -169,15 +170,6 @@ document.addEventListener('click', async (e) => {
     alert('Could not save proximity: ' + err.message);
   }
 });
-
-// Escape text, then linkify only http(s) URLs. Never produces an anchor for
-// javascript:/data: schemes — they don't match the http(s) pattern.
-function linkifyEsc(text) {
-  return esc(text).replace(
-    /(https?:\/\/[^\s<>"]+)/g,
-    (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /* Directory view (the big searchable table)                           */
@@ -352,19 +344,19 @@ function renderDossier(f) {
       <td>${esc(d.company)}${d.co_investors ? ' <span class="dim">👥</span>' : ''}</td>
       <td>${esc(d.round || '')}</td><td>${esc(d.amount || '')}</td>
       <td>${esc(d.role || '')}</td><td class="dim">${esc(d.announced_on || '')}</td>
-      <td>${d.source_url ? `<a href="${esc(d.source_url)}" target="_blank" rel="noopener noreferrer">↗</a>` : `<span class="dim">${esc(d.source || '')}</span>`}</td>
+      <td>${d.source_url ? httpLink(d.source_url, '↗') : `<span class="dim">${esc(d.source || '')}</span>`}</td>
     </tr>`;
     }).join('');
 
   const contacts = (f.contacts || []).map((c) => {
     const links = [
-      c.linkedin_url ? `<a href="${esc(c.linkedin_url)}" target="_blank" rel="noopener noreferrer">LinkedIn</a>` : '',
-      c.signal_url ? `<a href="${esc(c.signal_url)}" target="_blank" rel="noopener noreferrer">Signal</a>` : '',
+      c.linkedin_url ? httpLink(c.linkedin_url, 'LinkedIn') : '',
+      c.signal_url ? httpLink(c.signal_url, 'Signal') : '',
     ].filter(Boolean).join(' · ');
     return `<tr>
     <td>${esc(c.name)}${c.is_primary ? ' ★' : ''}</td>
     <td>${esc(c.title || '')}${c.notes ? `<div class="dim c-notes">${esc(c.notes)}</div>` : ''}</td>
-    <td>${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : '—'}</td>
+    <td>${c.email ? mailtoLink(c.email) : '—'}</td>
     <td>${links}</td>
   </tr>`;
   }).join('');
@@ -373,7 +365,7 @@ function renderDossier(f) {
     .slice()
     .sort((a, b) => String(b.published_on || '').localeCompare(String(a.published_on || '')))
     .slice(0, 20)
-    .map((n) => `<li><a href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">${esc(n.title || n.url)}</a>
+    .map((n) => `<li>${httpLink(n.url, n.title || n.url)}
       <span class="dim">${esc(n.published_on || '')} · ${esc(n.source || '')}</span></li>`).join('');
 
   $('dossier').innerHTML = `
@@ -388,7 +380,7 @@ function renderDossier(f) {
       </label>`}
     </div>
     <div class="d-meta dim">
-      ${f.website ? `<a href="${esc(f.website)}" target="_blank" rel="noopener noreferrer">${esc(f.website)}</a> · ` : ''}
+      ${f.website ? `${httpLink(f.website, f.website)} · ` : ''}
       ${esc(f.location || '')} ${f.tier_label ? `· ${esc(f.tier_label)}` : ''}
     </div>
     ${proximityMarkup(f.id, f.proximity)}
@@ -421,30 +413,6 @@ function renderDossier(f) {
 /* ------------------------------------------------------------------ */
 /* Digest view                                                         */
 /* ------------------------------------------------------------------ */
-
-// Tiny markdown renderer for digest content: escape first, then transform.
-function mdToHtml(md) {
-  const lines = esc(md).split('\n');
-  let html = '';
-  let inList = false;
-  for (const line of lines) {
-    let l = line
-      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-    if (/^\s*[-*] /.test(l)) {
-      if (!inList) { html += '<ul>'; inList = true; }
-      html += `<li>${l.replace(/^\s*[-*] /, '')}</li>`;
-      continue;
-    }
-    if (inList) { html += '</ul>'; inList = false; }
-    if (/^### /.test(l)) html += `<h3>${l.slice(4)}</h3>`;
-    else if (/^## /.test(l)) html += `<h2>${l.slice(3)}</h2>`;
-    else if (/^---+$/.test(l.trim())) html += '<hr/>';
-    else if (l.trim()) html += `<p>${l}</p>`;
-  }
-  if (inList) html += '</ul>';
-  return html;
-}
 
 async function goDigest() {
   showView('digestView');
@@ -583,16 +551,6 @@ function wireEvents() {
   $('dirTier').addEventListener('change', (e) => { dir.tier = Number(e.target.value); if (dir.firms) renderDirectory(); });
   $('dirProx').addEventListener('change', (e) => { dir.prox = e.target.value; if (dir.firms) renderDirectory(); });
   $('dirWatched').addEventListener('change', (e) => { dir.watched = e.target.checked; if (dir.firms) renderDirectory(); });
-}
-
-/* ------------------------------------------------------------------ */
-/* util                                                                */
-/* ------------------------------------------------------------------ */
-
-function esc(s) {
-  return String(s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 document.addEventListener('DOMContentLoaded', init);
